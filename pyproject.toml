@@ -16,6 +16,8 @@ dependencies = [
     "numpy",
     "vllm>=0.18",
     "peft",
+    "duckduckgo-search>=6.0",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
