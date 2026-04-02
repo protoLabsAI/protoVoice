@@ -55,6 +55,9 @@ Measured on NVIDIA RTX PRO 6000 Blackwell (96GB):
 - **Streaming pipeline**: LLM tokens stream through a sentence chunker to TTS — audio plays while the LLM is still generating
 - **Interruption**: Start speaking mid-response and it stops, listens, responds to the new input
 - **Context memory**: Sliding window of 10 turns with automatic summarization of older context
+- **Modes**: Chat, Transcribe, Agent (web search + calculator), Wake Word, and custom skills loaded from `.proto/skills/*.md`
+- **Settings sidebar**: Collapsible right-hand drawer for mode, voice, VAD, and LLM settings
+- **Voice-safe prompts**: All system prompts (including skills) enforce spoken output — no markdown, emojis, or formatting reaches TTS
 - **Self-contained**: Built-in vLLM server for the LLM, or connect to an external one
 - **Auth**: Optional login protection via `GRADIO_AUTH`
 
