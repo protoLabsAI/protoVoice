@@ -293,117 +293,90 @@ def build_ui(skills):
     # ------------------------------------------------------------------
     with gr.Blocks(
         title="protoVoice",
-        css="""
-        .pv-header { align-items: center !important; }
-        .pv-header h2 { margin: 0 !important; flex: 1; }
-        #pv-menu-btn { min-width: 40px !important; }
-        #pv-settings-panel {
-            border-left: 1px solid var(--border-color-primary);
-            padding-left: 8px;
-        }
-        #transcript-col { margin-top: 8px; }
-        """,
+        css="#transcript-col { margin-top: 8px; }",
     ) as demo:
 
-        drawer_open = gr.State(False)
+        # Header
+        gr.Markdown("## protoVoice")
 
-        # Header: title + hamburger
-        with gr.Row(elem_classes="pv-header"):
-            gr.Markdown("## protoVoice")
-            menu_btn = gr.Button("☰", elem_id="pv-menu-btn", scale=0, size="sm", variant="secondary")
+        # Wake word input — shown only when mode = wake_word
+        wake_word_box = gr.Textbox(
+            label="Trigger phrase",
+            placeholder="e.g. Hey Proto",
+            visible=False,
+            interactive=True,
+            max_lines=1,
+        )
 
-        with gr.Row():
-            with gr.Column(scale=3):
-                # Wake word input — shown only when mode = wake_word
-                wake_word_box = gr.Textbox(
-                    label="Trigger phrase",
-                    placeholder="e.g. Hey Proto",
-                    visible=False,
-                    interactive=True,
-                    max_lines=1,
-                )
+        # Main audio stream
+        Stream(
+            ReplyOnPause(
+                voice_handler,
+                algo_options=_algo_options,
+                output_sample_rate=24000,
+                can_interrupt=True,
+            ),
+            modality="audio",
+            mode="send-receive",
+            rtc_configuration={"iceServers": [{"urls": "stun:stun.l.google.com:19302"}]},
+        )
 
-                # Main audio stream
-                Stream(
-                    ReplyOnPause(
-                        voice_handler,
-                        algo_options=_algo_options,
-                        output_sample_rate=24000,
-                        can_interrupt=True,
-                    ),
-                    modality="audio",
-                    mode="send-receive",
-                    rtc_configuration={"iceServers": [{"urls": "stun:stun.l.google.com:19302"}]},
-                )
+        # Transcript panel — shown only when mode = transcribe
+        with gr.Column(visible=False, elem_id="transcript-col") as transcript_col:
+            transcript_box = gr.Textbox(
+                label="Transcript",
+                lines=10,
+                max_lines=20,
+                interactive=False,
+                show_copy_button=True,
+            )
+            clear_transcript_btn = gr.Button("Clear transcript", size="sm", variant="secondary")
 
-                # Transcript panel — shown only when mode = transcribe
-                with gr.Column(visible=False, elem_id="transcript-col") as transcript_col:
-                    transcript_box = gr.Textbox(
-                        label="Transcript",
-                        lines=10,
-                        max_lines=20,
-                        interactive=False,
-                        show_copy_button=True,
-                    )
-                    clear_transcript_btn = gr.Button("Clear transcript", size="sm", variant="secondary")
+        # Settings sidebar — native Gradio drawer
+        with gr.Sidebar(label="Settings", open=False, position="right"):
+            gr.Markdown("**Mode**")
+            mode_dd = gr.Dropdown(
+                choices=mode_choices,
+                value="chat",
+                label=None,
+                show_label=False,
+                interactive=True,
+            )
 
-            # Settings panel — toggled by hamburger button
-            with gr.Column(scale=1, visible=False, min_width=260, elem_id="pv-settings-panel") as settings_panel:
-                with gr.Row():
-                    gr.Markdown("### Settings")
-                    close_btn = gr.Button("✕", scale=0, size="sm", variant="secondary")
+            gr.Markdown("**VAD**")
+            speech_thresh = gr.Slider(
+                0.0, 1.0, value=0.1, step=0.05,
+                label="Speech threshold",
+                info="Higher = less sensitive",
+            )
+            start_thresh = gr.Slider(
+                0.0, 1.0, value=0.5, step=0.05,
+                label="Start threshold",
+            )
+            chunk_dur = gr.Slider(
+                0.2, 1.2, value=0.6, step=0.1,
+                label="Chunk duration (s)",
+                info="Latency vs accuracy",
+            )
 
-                gr.Markdown("**Mode**")
-                mode_dd = gr.Dropdown(
-                    choices=mode_choices,
-                    value="chat",
-                    label=None,
-                    show_label=False,
-                    interactive=True,
-                )
+            gr.Markdown("**Voice**")
+            voice_dd = gr.Dropdown(
+                choices=all_voices,
+                value=KOKORO_VOICE,
+                label="TTS voice",
+                interactive=True,
+            )
 
-                gr.Markdown("**VAD**")
-                speech_thresh = gr.Slider(
-                    0.0, 1.0, value=0.1, step=0.05,
-                    label="Speech threshold",
-                    info="Higher = less sensitive",
-                )
-                start_thresh = gr.Slider(
-                    0.0, 1.0, value=0.5, step=0.05,
-                    label="Start threshold",
-                )
-                chunk_dur = gr.Slider(
-                    0.2, 1.2, value=0.6, step=0.1,
-                    label="Chunk duration (s)",
-                    info="Latency vs accuracy",
-                )
+            gr.Markdown("**LLM**")
+            temp_slider = gr.Slider(0.0, 1.0, value=0.7, step=0.05, label="Temperature")
+            tokens_slider = gr.Slider(50, 500, value=150, step=25, label="Max tokens")
 
-                gr.Markdown("**Voice**")
-                voice_dd = gr.Dropdown(
-                    choices=all_voices,
-                    value=KOKORO_VOICE,
-                    label="TTS voice",
-                    interactive=True,
-                )
-
-                gr.Markdown("**LLM**")
-                temp_slider = gr.Slider(0.0, 1.0, value=0.7, step=0.05, label="Temperature")
-                tokens_slider = gr.Slider(50, 500, value=150, step=25, label="Max tokens")
-
-                gr.Markdown("**Session**")
-                clear_history_btn = gr.Button("Clear conversation history", size="sm", variant="secondary")
+            gr.Markdown("**Session**")
+            clear_history_btn = gr.Button("Clear conversation history", size="sm", variant="secondary")
 
         # ------------------------------------------------------------------
         # Event wiring
         # ------------------------------------------------------------------
-        def _open_drawer(_):
-            return True, gr.update(visible=True)
-
-        def _close_drawer(_):
-            return False, gr.update(visible=False)
-
-        menu_btn.click(fn=_open_drawer, inputs=[drawer_open], outputs=[drawer_open, settings_panel])
-        close_btn.click(fn=_close_drawer, inputs=[drawer_open], outputs=[drawer_open, settings_panel])
 
         mode_dd.change(
             fn=on_mode_change,
