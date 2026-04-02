@@ -7,6 +7,7 @@ import re
 import threading
 from datetime import datetime
 from typing import Generator
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +91,17 @@ def _calculator(expression: str) -> str:
         return f"Calculation error: {e}"
 
 
-def _execute_tool(name: str, args: dict) -> str:
+def _execute_tool(name: str, args: dict, timezone: str = "UTC") -> str:
     if name == "web_search":
         return _web_search(args.get("query", ""))
     if name == "calculator":
         return _calculator(args.get("expression", ""))
     if name == "get_datetime":
-        return datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+        try:
+            tz = ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, Exception):
+            tz = ZoneInfo("UTC")
+        return datetime.now(tz=tz).strftime("%A, %B %d, %Y at %I:%M %p %Z")
     return f"Unknown tool: {name}"
 
 
@@ -110,6 +115,7 @@ def react_loop(
     temperature: float,
     cancel: threading.Event,
     api_key: str = "",
+    timezone: str = "UTC",
 ) -> Generator[tuple[str, str], None, None]:
     """
     Generator yielding typed events:
@@ -164,7 +170,7 @@ def react_loop(
         if phrases:
             yield ("phrase", random.choice(phrases))
 
-        result = _execute_tool(name, args)
+        result = _execute_tool(name, args, timezone)
         logger.info(f"[ReAct] {name}({args!r}) → {result[:120]!r}")
 
         messages.append({"role": "assistant", "content": content})

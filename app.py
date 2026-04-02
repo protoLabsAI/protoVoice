@@ -436,6 +436,13 @@ def build_ui(skills):
         clear_transcript_btn.click(fn=_clear_transcript, outputs=[transcript_box])
         clear_history_btn.click(fn=on_clear_history)
 
+        # Detect browser timezone on load and store in config
+        demo.load(
+            fn=lambda tz: setattr(_config, "timezone", tz),
+            inputs=[gr.State("UTC")],
+            js="() => [Intl.DateTimeFormat().resolvedOptions().timeZone]",
+        )
+
         # Transcript polling — fires every second
         timer = gr.Timer(value=1.0)
         timer.tick(fn=_get_transcript, outputs=[transcript_box])

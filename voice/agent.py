@@ -31,6 +31,7 @@ class VoiceConfig:
     model: str = "local"
     api_key: str = ""
     whisper_model: str = "openai/whisper-large-v3-turbo"
+    timezone: str = "UTC"
 
 
 class VoiceAgent:
@@ -136,6 +137,7 @@ class VoiceAgent:
                 config.temperature,
                 self.cancel,
                 config.api_key,
+                config.timezone,
             ):
                 if self.cancel.is_set():
                     break
