@@ -13,6 +13,7 @@ services:
     runtime: nvidia
     ports:
       - "${PORT:-7866}:7866"
+      - "${VOICES_PORT:-7867}:7867"
     volumes:
       - ${HF_HOME:-/mnt/models/huggingface}:/models
     environment:
@@ -30,6 +31,7 @@ services:
       - LLM_URL=${LLM_URL:-}
       - GRADIO_ROOT_PATH=${GRADIO_ROOT_PATH:-}
       - LLM_SERVED_NAME=${LLM_SERVED_NAME:-local}
+      - VOICES_PORT=${VOICES_PORT:-7867}
     networks:
       - default
       - gateway
