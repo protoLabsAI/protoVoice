@@ -289,12 +289,6 @@ def build_ui(skills):
         agent.clear_history()
 
     # ------------------------------------------------------------------
-    # JS helpers — pure client-side drawer toggle (no server round-trip)
-    # ------------------------------------------------------------------
-    _JS_OPEN  = "() => { const d=document.getElementById('pv-drawer'); if(d) d.classList.add('pv-open'); }"
-    _JS_CLOSE = "() => { const d=document.getElementById('pv-drawer'); if(d) d.classList.remove('pv-open'); }"
-
-    # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------
     with gr.Blocks(
@@ -303,117 +297,113 @@ def build_ui(skills):
         .pv-header { align-items: center !important; }
         .pv-header h2 { margin: 0 !important; flex: 1; }
         #pv-menu-btn { min-width: 40px !important; }
-        #pv-drawer {
-            position: fixed !important;
-            top: 0 !important; right: 0 !important;
-            width: 300px !important; height: 100vh !important;
-            transform: translateX(110%) !important;
-            transition: transform 0.25s ease !important;
-            background: var(--background-fill-primary) !important;
-            border-left: 1px solid var(--border-color-primary) !important;
-            box-shadow: -8px 0 32px rgba(0,0,0,0.18) !important;
-            z-index: 9999 !important;
-            overflow-y: auto !important;
-            padding: 16px !important;
-            pointer-events: none !important;
-        }
-        #pv-drawer.pv-open {
-            transform: translateX(0) !important;
-            pointer-events: auto !important;
+        #pv-settings-panel {
+            border-left: 1px solid var(--border-color-primary);
+            padding-left: 8px;
         }
         #transcript-col { margin-top: 8px; }
         """,
     ) as demo:
+
+        drawer_open = gr.State(False)
 
         # Header: title + hamburger
         with gr.Row(elem_classes="pv-header"):
             gr.Markdown("## protoVoice")
             menu_btn = gr.Button("☰", elem_id="pv-menu-btn", scale=0, size="sm", variant="secondary")
 
-        # Wake word input — shown only when mode = wake_word
-        wake_word_box = gr.Textbox(
-            label="Trigger phrase",
-            placeholder="e.g. Hey Proto",
-            visible=False,
-            interactive=True,
-            max_lines=1,
-        )
+        with gr.Row():
+            with gr.Column(scale=3):
+                # Wake word input — shown only when mode = wake_word
+                wake_word_box = gr.Textbox(
+                    label="Trigger phrase",
+                    placeholder="e.g. Hey Proto",
+                    visible=False,
+                    interactive=True,
+                    max_lines=1,
+                )
 
-        # Main audio stream
-        Stream(
-            ReplyOnPause(
-                voice_handler,
-                algo_options=_algo_options,
-                output_sample_rate=24000,
-                can_interrupt=True,
-            ),
-            modality="audio",
-            mode="send-receive",
-            rtc_configuration={"iceServers": [{"urls": "stun:stun.l.google.com:19302"}]},
-        )
+                # Main audio stream
+                Stream(
+                    ReplyOnPause(
+                        voice_handler,
+                        algo_options=_algo_options,
+                        output_sample_rate=24000,
+                        can_interrupt=True,
+                    ),
+                    modality="audio",
+                    mode="send-receive",
+                    rtc_configuration={"iceServers": [{"urls": "stun:stun.l.google.com:19302"}]},
+                )
 
-        # Transcript panel — shown only when mode = transcribe
-        with gr.Column(visible=False, elem_id="transcript-col") as transcript_col:
-            transcript_box = gr.Textbox(
-                label="Transcript",
-                lines=10,
-                max_lines=20,
-                interactive=False,
-                show_copy_button=True,
-            )
-            clear_transcript_btn = gr.Button("Clear transcript", size="sm", variant="secondary")
+                # Transcript panel — shown only when mode = transcribe
+                with gr.Column(visible=False, elem_id="transcript-col") as transcript_col:
+                    transcript_box = gr.Textbox(
+                        label="Transcript",
+                        lines=10,
+                        max_lines=20,
+                        interactive=False,
+                        show_copy_button=True,
+                    )
+                    clear_transcript_btn = gr.Button("Clear transcript", size="sm", variant="secondary")
 
-        # Side drawer — floats over the page, hidden by default
-        with gr.Column(elem_id="pv-drawer"):
-            with gr.Row():
-                gr.Markdown("### Settings")
-                close_btn = gr.Button("✕", scale=0, size="sm", variant="secondary")
+            # Settings panel — toggled by hamburger button
+            with gr.Column(scale=1, visible=False, min_width=260, elem_id="pv-settings-panel") as settings_panel:
+                with gr.Row():
+                    gr.Markdown("### Settings")
+                    close_btn = gr.Button("✕", scale=0, size="sm", variant="secondary")
 
-            gr.Markdown("**Mode**")
-            mode_dd = gr.Dropdown(
-                choices=mode_choices,
-                value="chat",
-                label=None,
-                show_label=False,
-                interactive=True,
-            )
+                gr.Markdown("**Mode**")
+                mode_dd = gr.Dropdown(
+                    choices=mode_choices,
+                    value="chat",
+                    label=None,
+                    show_label=False,
+                    interactive=True,
+                )
 
-            gr.Markdown("**VAD**")
-            speech_thresh = gr.Slider(
-                0.0, 1.0, value=0.1, step=0.05,
-                label="Speech threshold",
-                info="Higher = less sensitive",
-            )
-            start_thresh = gr.Slider(
-                0.0, 1.0, value=0.5, step=0.05,
-                label="Start threshold",
-            )
-            chunk_dur = gr.Slider(
-                0.2, 1.2, value=0.6, step=0.1,
-                label="Chunk duration (s)",
-                info="Latency vs accuracy",
-            )
+                gr.Markdown("**VAD**")
+                speech_thresh = gr.Slider(
+                    0.0, 1.0, value=0.1, step=0.05,
+                    label="Speech threshold",
+                    info="Higher = less sensitive",
+                )
+                start_thresh = gr.Slider(
+                    0.0, 1.0, value=0.5, step=0.05,
+                    label="Start threshold",
+                )
+                chunk_dur = gr.Slider(
+                    0.2, 1.2, value=0.6, step=0.1,
+                    label="Chunk duration (s)",
+                    info="Latency vs accuracy",
+                )
 
-            gr.Markdown("**Voice**")
-            voice_dd = gr.Dropdown(
-                choices=all_voices,
-                value=KOKORO_VOICE,
-                label="TTS voice",
-                interactive=True,
-            )
+                gr.Markdown("**Voice**")
+                voice_dd = gr.Dropdown(
+                    choices=all_voices,
+                    value=KOKORO_VOICE,
+                    label="TTS voice",
+                    interactive=True,
+                )
 
-            gr.Markdown("**LLM**")
-            temp_slider = gr.Slider(0.0, 1.0, value=0.7, step=0.05, label="Temperature")
-            tokens_slider = gr.Slider(50, 500, value=150, step=25, label="Max tokens")
+                gr.Markdown("**LLM**")
+                temp_slider = gr.Slider(0.0, 1.0, value=0.7, step=0.05, label="Temperature")
+                tokens_slider = gr.Slider(50, 500, value=150, step=25, label="Max tokens")
 
-            gr.Markdown("**Session**")
-            clear_history_btn = gr.Button("Clear conversation history", size="sm", variant="secondary")
+                gr.Markdown("**Session**")
+                clear_history_btn = gr.Button("Clear conversation history", size="sm", variant="secondary")
 
         # ------------------------------------------------------------------
         # Event wiring
         # ------------------------------------------------------------------
-        menu_btn.click(fn=None, js=_JS_OPEN)
-        close_btn.click(fn=None, js=_JS_CLOSE)
+        def _open_drawer(_):
+            return True, gr.update(visible=True)
+
+        def _close_drawer(_):
+            return False, gr.update(visible=False)
+
+        menu_btn.click(fn=_open_drawer, inputs=[drawer_open], outputs=[drawer_open, settings_panel])
+        close_btn.click(fn=_close_drawer, inputs=[drawer_open], outputs=[drawer_open, settings_panel])
 
         mode_dd.change(
             fn=on_mode_change,
