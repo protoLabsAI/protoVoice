@@ -12,6 +12,12 @@ SUMMARY_PROMPT = (
 )
 
 
+def _headers(api_key: str) -> dict:
+    if api_key:
+        return {"Authorization": f"Bearer {api_key}"}
+    return {}
+
+
 def stream_llm_tokens(
     text: str,
     history: list[dict],
@@ -21,6 +27,7 @@ def stream_llm_tokens(
     model: str,
     max_tokens: int = 150,
     temperature: float = 0.7,
+    api_key: str = "",
 ):
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
@@ -30,6 +37,7 @@ def stream_llm_tokens(
         with httpx.Client(timeout=60.0) as client:
             with client.stream(
                 "POST", f"{llm_url}/chat/completions",
+                headers=_headers(api_key),
                 json={
                     "model": model,
                     "messages": messages,
@@ -65,6 +73,7 @@ def llm_complete(
     max_tokens: int = 500,
     temperature: float = 0.7,
     tools: list[dict] | None = None,
+    api_key: str = "",
 ) -> dict:
     """Non-streaming completion. Returns the assistant message dict."""
     payload: dict = {
@@ -78,12 +87,17 @@ def llm_complete(
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
 
-    r = httpx.post(f"{llm_url}/chat/completions", json=payload, timeout=60.0)
+    r = httpx.post(
+        f"{llm_url}/chat/completions",
+        headers=_headers(api_key),
+        json=payload,
+        timeout=60.0,
+    )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]
 
 
-def llm_summarize(history: list[dict], llm_url: str, model: str) -> str:
+def llm_summarize(history: list[dict], llm_url: str, model: str, api_key: str = "") -> str:
     messages = [
         {"role": "system", "content": SUMMARY_PROMPT},
         {"role": "user", "content": "\n".join(
@@ -93,6 +107,7 @@ def llm_summarize(history: list[dict], llm_url: str, model: str) -> str:
     try:
         r = httpx.post(
             f"{llm_url}/chat/completions",
+            headers=_headers(api_key),
             json={
                 "model": model,
                 "messages": messages,

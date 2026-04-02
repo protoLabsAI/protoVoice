@@ -29,6 +29,7 @@ class VoiceConfig:
     system_prompt: str = ""
     llm_url: str = "http://localhost:8100/v1"
     model: str = "local"
+    api_key: str = ""
     whisper_model: str = "openai/whisper-large-v3-turbo"
 
 
@@ -70,7 +71,7 @@ class VoiceAgent:
                 if self.summary:
                     to_sum.append({"role": "system", "content": f"Prior summary: {self.summary}"})
                 to_sum.extend(old)
-                s = llm_summarize(to_sum, config.llm_url, config.model)
+                s = llm_summarize(to_sum, config.llm_url, config.model, config.api_key)
                 if s:
                     self.summary = s
                     logger.info(f"[Context] Summarized: {s[:80]}...")
@@ -134,6 +135,7 @@ class VoiceAgent:
                 config.max_tokens,
                 config.temperature,
                 self.cancel,
+                config.api_key,
             ):
                 if self.cancel.is_set():
                     break
@@ -174,6 +176,7 @@ class VoiceAgent:
             config.model,
             config.max_tokens,
             config.temperature,
+            config.api_key,
         ):
             if self.cancel.is_set():
                 interrupted = True

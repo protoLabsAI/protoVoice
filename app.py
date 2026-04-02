@@ -46,6 +46,7 @@ VLLM_PORT = int(os.environ.get("VLLM_PORT", "8100"))
 LLM_URL = os.environ.get("LLM_URL", f"http://localhost:{VLLM_PORT}/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "Qwen/Qwen3.5-4B")
 LLM_SERVED_NAME = os.environ.get("LLM_SERVED_NAME", "local")
+LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "openai/whisper-large-v3-turbo")
 KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 KOKORO_LANG = os.environ.get("KOKORO_LANG", "a")
@@ -97,6 +98,7 @@ _config = VoiceConfig(
     system_prompt=CHAT_SYSTEM_PROMPT,
     llm_url=LLM_URL,
     model=LLM_SERVED_NAME,
+    api_key=LLM_API_KEY,
     whisper_model=WHISPER_MODEL,
 )
 
@@ -368,6 +370,28 @@ def build_ui(skills):
             )
 
             gr.Markdown("**LLM**")
+            llm_url_box = gr.Textbox(
+                label="Endpoint URL",
+                value=LLM_URL,
+                placeholder="http://gateway:8000/v1",
+                interactive=True,
+                max_lines=1,
+            )
+            llm_model_box = gr.Textbox(
+                label="Model name",
+                value=LLM_SERVED_NAME,
+                placeholder="gpt-4o, claude-3-5-sonnet, local, …",
+                interactive=True,
+                max_lines=1,
+            )
+            llm_api_key_box = gr.Textbox(
+                label="API key",
+                value=LLM_API_KEY,
+                placeholder="sk-…  (leave blank for local)",
+                type="password",
+                interactive=True,
+                max_lines=1,
+            )
             temp_slider = gr.Slider(0.0, 1.0, value=0.7, step=0.05, label="Temperature")
             tokens_slider = gr.Slider(50, 500, value=150, step=25, label="Max tokens")
 
@@ -403,6 +427,9 @@ def build_ui(skills):
         temp_slider.change(fn=lambda v: setattr(_config, "temperature", v), inputs=[temp_slider])
         tokens_slider.change(fn=lambda v: setattr(_config, "max_tokens", int(v)), inputs=[tokens_slider])
         wake_word_box.change(fn=lambda v: setattr(_config, "wake_word", v), inputs=[wake_word_box])
+        llm_url_box.change(fn=lambda v: setattr(_config, "llm_url", v.strip()), inputs=[llm_url_box])
+        llm_model_box.change(fn=lambda v: setattr(_config, "model", v.strip()), inputs=[llm_model_box])
+        llm_api_key_box.change(fn=lambda v: setattr(_config, "api_key", v.strip()), inputs=[llm_api_key_box])
 
         # Session controls
         clear_transcript_btn.click(fn=_clear_transcript, outputs=[transcript_box])

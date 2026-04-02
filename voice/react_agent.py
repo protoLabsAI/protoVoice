@@ -134,6 +134,7 @@ def react_loop(
     max_tokens: int,
     temperature: float,
     cancel: threading.Event,
+    api_key: str = "",
 ) -> Generator[tuple[str, str], None, None]:
     """
     Generator yielding typed events:
@@ -161,6 +162,7 @@ def react_loop(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 tools=TOOL_SCHEMAS,
+                api_key=api_key,
             )
         except Exception as e:
             logger.error(f"[ReAct] LLM error: {e}")
