@@ -396,6 +396,15 @@ def build_ui(skills):
             temp_slider = gr.Slider(0.0, 1.0, value=0.7, step=0.05, label="Temperature")
             tokens_slider = gr.Slider(50, 500, value=150, step=25, label="Max tokens")
 
+            gr.Markdown("**Agent**")
+            tz_box = gr.Textbox(
+                label="Timezone",
+                value="UTC",
+                placeholder="e.g. America/New_York",
+                interactive=True,
+                max_lines=1,
+            )
+
             gr.Markdown("**Session**")
             clear_history_btn = gr.Button("Clear conversation history", size="sm", variant="secondary")
 
@@ -431,17 +440,11 @@ def build_ui(skills):
         llm_url_box.change(fn=lambda v: setattr(_config, "llm_url", v.strip()), inputs=[llm_url_box])
         llm_model_box.change(fn=lambda v: setattr(_config, "model", v.strip()), inputs=[llm_model_box])
         llm_api_key_box.change(fn=lambda v: setattr(_config, "api_key", v.strip()), inputs=[llm_api_key_box])
+        tz_box.change(fn=lambda v: setattr(_config, "timezone", v.strip() or "UTC"), inputs=[tz_box])
 
         # Session controls
         clear_transcript_btn.click(fn=_clear_transcript, outputs=[transcript_box])
         clear_history_btn.click(fn=on_clear_history)
-
-        # Detect browser timezone on load and store in config
-        demo.load(
-            fn=lambda tz: setattr(_config, "timezone", tz),
-            inputs=[gr.State("UTC")],
-            js="() => [Intl.DateTimeFormat().resolvedOptions().timeZone]",
-        )
 
         # Transcript polling — fires every second
         timer = gr.Timer(value=1.0)
