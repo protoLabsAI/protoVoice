@@ -76,7 +76,6 @@ def llm_complete(
     model: str,
     max_tokens: int = 500,
     temperature: float = 0.7,
-    tools: list[dict] | None = None,
     api_key: str = "",
 ) -> dict:
     """Non-streaming completion. Returns the assistant message dict."""
@@ -86,9 +85,6 @@ def llm_complete(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
-    if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
 
     r = httpx.post(
         f"{llm_url}/chat/completions",
@@ -98,6 +94,7 @@ def llm_complete(
     )
     r.raise_for_status()
     return r.json()["choices"][0]["message"]
+
 
 
 def llm_summarize(history: list[dict], llm_url: str, model: str, api_key: str = "") -> str:

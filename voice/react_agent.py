@@ -3,6 +3,7 @@ import json
 import logging
 import operator
 import random
+import re
 import threading
 from datetime import datetime
 from typing import Generator
@@ -11,47 +12,22 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 5
 
-TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "web_search",
-            "description": "Search the web for current information, facts, or recent news.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query string"}
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "calculator",
-            "description": "Evaluate a mathematical expression. Use for arithmetic, percentages, conversions.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "expression": {
-                        "type": "string",
-                        "description": "Math expression to evaluate, e.g. '(15 * 1.2) + 3'",
-                    }
-                },
-                "required": ["expression"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_datetime",
-            "description": "Get the current date and time.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-]
+# Prompt-based tool descriptions — no native function calling required.
+REACT_TOOL_PROMPT = (
+    "You have access to the following tools. To use one, output exactly:\n"
+    "ACTION: <tool_name>\n"
+    "INPUT: <json>\n\n"
+    "Available tools:\n"
+    "  web_search   — {\"query\": \"...\"} — search the web for current info or news\n"
+    "  calculator   — {\"expression\": \"...\"} — evaluate a math expression, e.g. \"15 * 1.2\"\n"
+    "  get_datetime — {} — get the current date and time\n\n"
+    "Only use a tool when you actually need external information. "
+    "When you have enough to answer, respond directly in spoken sentences — no ACTION block."
+)
+
+_ACTION_RE = re.compile(
+    r"ACTION:\s*(\w+)\s*\nINPUT:\s*(\{[^}]*\})", re.DOTALL
+)
 
 THINKING_PHRASES = {
     "web_search": [
@@ -107,7 +83,6 @@ def _calculator(expression: str) -> str:
     try:
         tree = ast.parse(expression.strip(), mode="eval")
         result = _safe_eval(tree.body)
-        # Format cleanly: no trailing .0 for whole numbers
         if isinstance(result, float) and result.is_integer():
             return str(int(result))
         return str(result)
@@ -144,7 +119,8 @@ def react_loop(
     """
     from .llm import llm_complete
 
-    messages = [{"role": "system", "content": system_prompt}]
+    react_system = system_prompt + "\n\n" + REACT_TOOL_PROMPT
+    messages = [{"role": "system", "content": react_system}]
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})
 
@@ -161,7 +137,6 @@ def react_loop(
                 model=model,
                 max_tokens=max_tokens,
                 temperature=temperature,
-                tools=TOOL_SCHEMAS,
                 api_key=api_key,
             )
         except Exception as e:
@@ -169,40 +144,31 @@ def react_loop(
             yield ("token", "Sorry, I ran into an error.")
             return
 
-        tool_calls = msg.get("tool_calls") or []
+        content = (msg.get("content") or "").strip()
+        match = _ACTION_RE.search(content)
 
-        if not tool_calls:
-            content = (msg.get("content") or "").strip()
+        if not match:
+            # Final spoken response
             if content:
                 full_response = content
                 yield ("token", content)
             break
 
-        # Append assistant message with tool calls before executing
-        messages.append(msg)
+        name = match.group(1).strip()
+        try:
+            args = json.loads(match.group(2))
+        except json.JSONDecodeError:
+            args = {}
 
-        for tc in tool_calls:
-            if cancel.is_set():
-                return
-            fn = tc.get("function", {})
-            name = fn.get("name", "")
-            try:
-                args = json.loads(fn.get("arguments", "{}"))
-            except json.JSONDecodeError:
-                args = {}
+        phrases = THINKING_PHRASES.get(name, [])
+        if phrases:
+            yield ("phrase", random.choice(phrases))
 
-            phrases = THINKING_PHRASES.get(name, [])
-            if phrases:
-                yield ("phrase", random.choice(phrases))
+        result = _execute_tool(name, args)
+        logger.info(f"[ReAct] {name}({args!r}) → {result[:120]!r}")
 
-            result = _execute_tool(name, args)
-            logger.info(f"[ReAct] {name}({args!r}) → {result[:120]!r}")
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", ""),
-                "content": result,
-            })
+        messages.append({"role": "assistant", "content": content})
+        messages.append({"role": "user", "content": f"RESULT: {result}"})
 
     if full_response:
         yield ("history", (user_text, full_response))
