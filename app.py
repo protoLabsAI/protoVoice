@@ -291,8 +291,8 @@ def build_ui(skills):
     # ------------------------------------------------------------------
     # JS helpers — pure client-side drawer toggle (no server round-trip)
     # ------------------------------------------------------------------
-    _JS_OPEN  = "() => { const d=document.getElementById('pv-drawer'); if(d) d.style.transform='translateX(0)'; }"
-    _JS_CLOSE = "() => { const d=document.getElementById('pv-drawer'); if(d) d.style.transform='translateX(110%)'; }"
+    _JS_OPEN  = "() => { const d=document.getElementById('pv-drawer'); if(d) d.classList.add('pv-open'); }"
+    _JS_CLOSE = "() => { const d=document.getElementById('pv-drawer'); if(d) d.classList.remove('pv-open'); }"
 
     # ------------------------------------------------------------------
     # Layout
@@ -315,6 +315,11 @@ def build_ui(skills):
             z-index: 9999 !important;
             overflow-y: auto !important;
             padding: 16px !important;
+            pointer-events: none !important;
+        }
+        #pv-drawer.pv-open {
+            transform: translateX(0) !important;
+            pointer-events: auto !important;
         }
         #transcript-col { margin-top: 8px; }
         """,
