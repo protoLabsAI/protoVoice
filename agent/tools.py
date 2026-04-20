@@ -35,7 +35,7 @@ import httpx
 from a2a.client import A2ADispatchError, dispatch_message
 from a2a.registry import AgentRegistry
 
-from .delivery import DeliveryController, DeliveryPolicy
+from .delivery import DeliveryController
 from .filler import Latency
 
 logger = logging.getLogger(__name__)
@@ -314,27 +314,33 @@ def _a2a_dispatch_handler(registry: AgentRegistry):
 # Async tool — kept for M3 validation
 # ---------------------------------------------------------------------------
 
-def _slow_research_handler(controller: DeliveryController):
+def _slow_research_handler(_controller: DeliveryController):
+    """Async tool — the LLM acknowledges via its inline preamble (M10
+    TOOL USE prompt block), pipecat marks the call in-progress, the
+    background task does the work, and result_callback() at the end is
+    what tells the LLM the actual result. Pipecat then injects it as a
+    developer message and the LLM speaks the real answer.
+
+    DO NOT call result_callback in the foreground — pipecat treats it as
+    the finished result and the LLM thinks the tool returned that
+    string, so it'll happily chat about the topic with no real data.
+    """
     async def _handler(params: FunctionCallParams) -> None:
         query = params.arguments.get("query", "")
         logger.info(f"[slow_research] starting: {query!r} (sleep {SLOW_RESEARCH_SECS}s)")
-        await params.result_callback(
-            f"Sure — I'll look into {query} and let you know. You can keep talking."
-        )
 
         async def _background() -> None:
             await asyncio.sleep(SLOW_RESEARCH_SECS)
-            phrase = (
-                f"Okay, I found what you asked about {query}. "
-                f"This is still a synthetic placeholder — real long-form research lands later."
+            result = (
+                f"Investigation into '{query}' complete. "
+                "This is a synthetic placeholder — real long-form research "
+                "lands when this tool gets a real backend."
             )
-            keywords = tuple(w for w in query.split() if len(w) > 3)
-            await controller.deliver(
-                phrase,
-                policy=DeliveryPolicy.NEXT_SILENCE,
-                keywords=keywords,
-            )
-            logger.info(f"[slow_research] delivered ({len(phrase)} chars)")
+            try:
+                await params.result_callback(result)
+                logger.info(f"[slow_research] result_callback fired ({len(result)} chars)")
+            except Exception as e:
+                logger.exception(f"[slow_research] result_callback failed: {e}")
 
         asyncio.create_task(_background())
 
