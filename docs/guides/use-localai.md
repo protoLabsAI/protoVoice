@@ -4,29 +4,29 @@ protoVoice's STT, LLM, and TTS are all swappable via env. Point them at [LocalAI
 
 ## All-API setup (no in-process model loads)
 
-If you already have LocalAI hosting Whisper STT + Kokoro TTS + an LLM, this is enough:
+If you already have LocalAI hosting Whisper STT + Kokoro TTS + an LLM, drop these lines in `.env` at the repo root (copy from `.env.example`):
 
 ```bash
 # LLM
 START_VLLM=0
 LLM_URL=http://localai:8080/v1
 LLM_SERVED_NAME=qwen3.5-4b-instruct
-LLM_API_KEY=                       # leave blank if your LocalAI is open
+LLM_API_KEY=
 
 # STT
 STT_BACKEND=openai
 STT_URL=http://localai:8080/v1
-STT_MODEL=whisper-1                # whatever name LocalAI registers it as
+STT_MODEL=whisper-1
 
 # TTS
 TTS_BACKEND=openai
 TTS_OPENAI_URL=http://localai:8080/v1
-TTS_OPENAI_MODEL=kokoro            # the model name in LocalAI
-TTS_OPENAI_VOICE=af_heart          # the model's voice id
-TTS_OPENAI_SAMPLE_RATE=24000       # Kokoro's native rate
+TTS_OPENAI_MODEL=kokoro
+TTS_OPENAI_VOICE=af_heart
+TTS_OPENAI_SAMPLE_RATE=24000
 ```
 
-protoVoice now does no GPU work itself — it's a thin orchestration layer on top of LocalAI. You can run the protovoice container on a CPU box.
+Restart the server — protoVoice now does no GPU work itself. It's a thin orchestration layer on top of LocalAI, and can run on a CPU box.
 
 ## Mixing providers
 
@@ -86,42 +86,49 @@ Sub-second turn-around is realistic with a LAN gateway. Cloud-only paths push to
 
 ## Examples
 
-**Joe's setup**: LocalAI hosts Whisper + Kokoro + an LLM on the same box.
+**Joe's setup** (LocalAI, Whisper + Kokoro + an LLM on the same box) — drop in `.env`:
 
 ```bash
-START_VLLM=0 \
-LLM_URL=http://localai:8080/v1 LLM_SERVED_NAME=qwen3.5-4b \
-STT_BACKEND=openai STT_URL=http://localai:8080/v1 STT_MODEL=whisper-1 \
-TTS_BACKEND=openai TTS_OPENAI_URL=http://localai:8080/v1 TTS_OPENAI_MODEL=kokoro TTS_OPENAI_VOICE=af_heart \
-docker compose up -d protovoice
+START_VLLM=0
+LLM_URL=http://localai:8080/v1
+LLM_SERVED_NAME=qwen3.5-4b
+
+STT_BACKEND=openai
+STT_URL=http://localai:8080/v1
+STT_MODEL=whisper-1
+
+TTS_BACKEND=openai
+TTS_OPENAI_URL=http://localai:8080/v1
+TTS_OPENAI_MODEL=kokoro
+TTS_OPENAI_VOICE=af_heart
 ```
 
-(The protovoice container has no GPU work to do; you can drop the `runtime: nvidia` and `device_ids` from the compose file in this configuration.)
+Then `docker compose up -d protovoice`. The protovoice container has no GPU work to do in this configuration; you can drop `runtime: nvidia` and `device_ids` from the compose file.
 
-**LiteLLM Proxy** (e.g. the protoLabs `gateway:4000`): same config shape, single auth key, model names are whatever you registered in `litellm_config.yaml`.
+**LiteLLM Proxy** (e.g. the protoLabs `gateway:4000`) — same shape, single master key, model names from your `litellm_config.yaml`:
 
 ```bash
-START_VLLM=0 \
-LLM_URL=http://gateway:4000/v1 \
-LLM_SERVED_NAME=claude-opus-4-6 \
-LLM_API_KEY=$LITELLM_MASTER_KEY \
-\
-STT_BACKEND=openai \
-STT_URL=http://gateway:4000/v1 \
-STT_MODEL=whisper-1 \
-STT_API_KEY=$LITELLM_MASTER_KEY \
-\
-TTS_BACKEND=openai \
-TTS_OPENAI_URL=http://gateway:4000/v1 \
-TTS_OPENAI_MODEL=tts-1 \
-TTS_OPENAI_VOICE=alloy \
-TTS_OPENAI_API_KEY=$LITELLM_MASTER_KEY \
-\
-docker compose up -d protovoice
+START_VLLM=0
+LLM_URL=http://gateway:4000/v1
+LLM_SERVED_NAME=claude-opus-4-6
+LLM_API_KEY=${LITELLM_MASTER_KEY}
+
+STT_BACKEND=openai
+STT_URL=http://gateway:4000/v1
+STT_MODEL=whisper-1
+STT_API_KEY=${LITELLM_MASTER_KEY}
+
+TTS_BACKEND=openai
+TTS_OPENAI_URL=http://gateway:4000/v1
+TTS_OPENAI_MODEL=tts-1
+TTS_OPENAI_VOICE=alloy
+TTS_OPENAI_API_KEY=${LITELLM_MASTER_KEY}
+
+LITELLM_MASTER_KEY=sk-...
 ```
 
-LiteLLM is route-shaped — it dispatches the model name to whatever provider you've configured (Anthropic, OpenAI, Bedrock, Vertex, your own vLLM, etc.) so a single `LLM_SERVED_NAME=claude-opus-4-6` might map to Anthropic while `tts-1` maps to OpenAI. Pick model names per-service from your `litellm_config.yaml`.
+LiteLLM is route-shaped — it dispatches model names to whatever provider you've configured behind it (Anthropic, OpenAI, Bedrock, Vertex, your own vLLM, …). A single `LLM_SERVED_NAME=claude-opus-4-6` might hit Anthropic while `tts-1` hits OpenAI. Pick model names from your `litellm_config.yaml`.
 
 ::: tip
-LiteLLM by default requires the master key on every request. Get it set in the env (or use a virtual key per service for tighter scoping). The same key works for all three endpoints — there's no separate auth per modality.
+LiteLLM requires the master key on every request by default. The same key works for all three endpoints — there's no separate auth per modality. For tighter scoping, issue one virtual key per service.
 :::
