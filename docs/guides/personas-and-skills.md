@@ -38,13 +38,17 @@ system_prompt_file: tutor.md
 
 The path is relative to the YAML file.
 
-### Tool restriction *(planned, not enforced in M5)*
+### Tool restriction
 
 ```yaml
-tools: [calculator, get_datetime]
+tools: [calculator, get_datetime, web_search]
 ```
 
-M5 loads this field but doesn't enforce it yet — every skill has access to every registered tool. Coming in a later milestone.
+When set, the skill's session only sees the listed tools — the LLM literally can't call anything else because the others aren't in its `ToolsSchema`. Empty list (default) = expose every registered tool.
+
+Useful for keeping personas in lane: a kitchen-savvy `chef` skill doesn't need `a2a_dispatch` or `slow_research`; a customer-support skill might want only `web_search` + a `lookup_order` tool you've added.
+
+Unknown tool names in the list are logged as warnings and ignored. If your list filters down to zero tools, protoVoice refuses to leave the agent toolless and falls back to exposing all (with a warning).
 
 ## The default persona — `SOUL.md`
 

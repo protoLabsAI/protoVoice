@@ -1,50 +1,88 @@
 # Two-Model Split
 
-protoVoice is architected around a two-model split, even though the current M2 scaffold runs everything through one vLLM instance.
+protoVoice runs the in-pipeline LLM as a fast **router** and offloads heavy reasoning to a separate **thinker**. The router stays in the critical path of every turn; the thinker only fires when the router calls `deep_research`.
 
-## The idea
+There are **two ways to wire the thinker** — pick whichever fits your fleet.
 
-- **Small router model** — tiny, fast, local. Handles chitchat, trivial answers, and routing decisions (including tool dispatch).
-- **Thinker model** — heavyweight, either local (Qwen 35B / 122B) or via the LiteLLM gateway (Claude Opus, GPT-4, etc.). Handles real reasoning when the router says so.
+## The split
 
-Router lives in the voice turn loop. Thinker runs behind the `deep_research` tool (or future equivalents).
+- **Router** — the local OpenAI-compatible LLM at `LLM_URL` (typically a small fast model: Qwen3.5-4B / 9B, GPT-4o-mini, Llama 3 8B). Handles every user turn: chitchat, tool selection, the inline preamble before tool calls, and speaking the final answer.
+- **Thinker** — a more capable model OR another agent. Invoked only when the router decides it needs help (calls the `deep_research` tool).
 
-## Why split
+This pattern matters because:
 
-**TTFA.** The router needs to respond in < 200 ms. A 4 B model on a local GPU does 150-300 tok/s; a 35 B model does ~50 tok/s; a gateway call adds 200-500 ms of network. The router is in the critical path; the thinker is not.
+- **TTFA**. The router is in the critical path of every turn; latency is felt directly. Tiny models do 150-300 tok/s locally; big models do 30-50. Don't put a big model in the router slot.
+- **Cost**. Routing chitchat to a tiny local model burns zero API tokens. Only research questions hit the thinker.
+- **Latency isolation**. The thinker can take 2-30 s without blocking the conversation, because it runs behind a tool call that the user hears acknowledged immediately via the [inline preamble](/explanation/natural-fillers).
 
-**Cost.** Routing most turns to a tiny local model burns zero API tokens. Only the actual hard questions hit the gateway.
+## Two thinker mechanisms
 
-**Latency isolation.** The thinker can take 2-30 s without blocking the conversation, because it runs behind an async tool call with a filler.
+### Option 1 — direct LLM endpoint (`THINKER_URL`)
 
-## Current state (M2)
+Point at any OpenAI-compatible chat-completions endpoint:
 
-For validation, the router and thinker are the same model — whatever `LLM_URL` serves. This works but doesn't exercise the split. M3+ will bring up two endpoints:
+```bash
+THINKER_URL=http://gateway:4000/v1
+THINKER_MODEL=claude-opus-4-6
+THINKER_API_KEY=$LITELLM_MASTER_KEY
+```
 
-- `LLM_URL` → small local vLLM (router)
-- `THINKER_URL` → gateway (thinker)
+`deep_research(query="...")` POSTs the query as a one-shot user message to that endpoint and speaks the response. No agent context, no tools — just "raw model with a research-flavored system prompt."
 
-`deep_research` dispatches to `THINKER_URL`. Other tools reuse it.
+**Best when**: you have a LiteLLM gateway / cloud API and just want a bigger model behind one tool. Smallest moving part.
 
-## Router prompt discipline
+**Tunables**:
 
-The router gets a system prompt that says "if the user's question requires external info, call the `deep_research` tool; otherwise answer directly." Tight prompts matter because a small model's instruction-following is fragile.
+```bash
+THINKER_MAX_TOKENS=400
+THINKER_TEMPERATURE=0.4
+THINKER_SYSTEM_PROMPT="You are a research assistant. Answer thoroughly but concisely (2-4 sentences). Plain text only — no markdown."
+```
 
-## Thinker latency management
+### Option 2 — A2A dispatch to another agent (ava)
 
-The thinker can take 30+ s. During that time:
+Point at an A2A-speaking agent in `config/agents.yaml`:
 
-- Filler on dispatch (M2 ✓)
-- Periodic narrated progress (M2 ✓)
-- Optional result-push interruption (M3 +)
-- Eventually: streaming thinker output through the router for "partial answer" narration — still theoretical
+```yaml
+agents:
+  - name: ava
+    url: ${AVA_URL:-http://ava:3008/a2a}
+    auth:
+      scheme: apiKey
+      credentialsEnv: AVA_API_KEY
+```
 
-## Why not one model
+`deep_research(query="...")` does an A2A `message/send` to ava. Ava is a full agent with her own tools, memory, subagents, and dispatch authority. The answer comes back as an artifact and the router speaks it.
 
-One good model at every turn is simpler and generally better quality. It's also 3-5x more expensive and 2-10x slower at steady state. For a voice agent where the user is listening *live*, the latency tax is unacceptable for most turns.
+**Best when**: you have an orchestrator agent in the protoLabs fleet that's already wired up with the right knowledge / sub-agents / context. Strongest answers; one extra hop.
 
-If gateway latency drops below 300 ms and local inference becomes cheap enough, the split collapses. Not there yet.
+### Resolution priority
 
-## References
+When the user calls `deep_research`:
 
-- The pattern originates from protoUI (`protoLabsAI/protoUI`), which used local Qwen 4B + Opus via LiteLLM. We're porting the same split with pipecat's native tool-call plumbing replacing protoUI's hand-rolled threading.
+1. If `THINKER_URL` and `THINKER_MODEL` are set, use the direct endpoint.
+2. Else if `ava` is in the registry, dispatch via A2A.
+3. Else, return a synthetic placeholder (so dev without a fleet running doesn't see errors).
+
+You can configure both — the thinker takes priority. Use this if you want a fast cloud model for most lookups and ava as a fallback.
+
+## Why not just one model
+
+One good model at every turn is simpler and produces marginally better individual answers. It's also 3-5× more expensive and 2-10× slower at steady state. For a voice agent where the user is listening live, the latency tax is unacceptable for routine turns.
+
+If gateway latency drops below ~300 ms TTFB and local inference becomes free, the split collapses. We're not there yet.
+
+## Health check
+
+```bash
+curl http://localhost:7867/healthz | jq .thinker
+# {"configured": true, "model": "claude-opus-4-6"}
+# or
+# {"configured": false, "model": null}
+```
+
+## Code references
+
+- `agent/tools.py::_deep_research_handler` — the priority-ordered routing
+- `app.py::_thinker_or_none` + `_thinker_call` — the direct-endpoint client
+- `a2a/registry.py::AgentRegistry` — the A2A path

@@ -22,3 +22,11 @@ voice: am_michael
 temperature: 0.9
 max_tokens: 200
 filler_verbosity: brief
+
+# Restrict Bruno to the tools that match a kitchen-savvy persona.
+# A2A dispatch and slow_research are over-engineered for "what's a
+# substitute for cilantro?" Empty list = expose all (the default).
+tools:
+  - get_datetime
+  - calculator
+  - web_search

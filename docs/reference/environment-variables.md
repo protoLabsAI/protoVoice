@@ -27,6 +27,19 @@ All values have sensible defaults. Set via shell, `docker compose` environment, 
 | `LLM_MAX_TOKENS` | `150` | Cap per response |
 | `LLM_TEMPERATURE` | `0.7` | Sampling temperature |
 
+## Thinker (the heavier model behind `deep_research`)
+
+Optional. When unset, `deep_research` falls through to A2A→ava if configured, else a synthetic placeholder. See [Two-Model Split](/explanation/two-model-split).
+
+| Variable | Default | Purpose |
+|:---|:---|:---|
+| `THINKER_URL` | *(unset)* | OpenAI-compat base URL for the thinker model |
+| `THINKER_MODEL` | *(unset)* | Model name at that URL |
+| `THINKER_API_KEY` | `not-needed` | Bearer for the endpoint |
+| `THINKER_MAX_TOKENS` | `400` | Cap per thinker response |
+| `THINKER_TEMPERATURE` | `0.4` | Sampling temperature for the thinker |
+| `THINKER_SYSTEM_PROMPT` | *(built-in research-assistant prompt)* | Override to tune tone/length |
+
 ## STT
 
 | Variable | Default | Purpose |

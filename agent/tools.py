@@ -233,14 +233,42 @@ async def web_search_handler(params: FunctionCallParams) -> None:
     await params.result_callback(text[:2000])  # keep context manageable
 
 
-def _deep_research_handler(registry: AgentRegistry):
-    """Deep research → delegate to ava via A2A if reachable.
-    Falls back to a synthetic placeholder on any connection failure so the
-    tool never surfaces a raw error to the LLM (which would break the turn).
+def _deep_research_handler(registry: AgentRegistry, thinker=None):
+    """Deep research routing, in priority order:
+
+      1. `thinker` callable (THINKER_URL — direct LLM endpoint, e.g. a
+         bigger gateway model). Cheapest path when configured.
+      2. `ava` via A2A — full agent with its own tools and memory.
+         Strongest answers but costs an extra hop + session.
+      3. Synthetic placeholder — for dev without either configured.
+
+    The two-model-split design: the in-pipeline LLM (router) handles
+    chitchat and quick tool calls; deep_research delegates the heavy
+    thinking to a more capable model OR to a specialist agent. Both
+    target the same tool name — operators wire whichever fits.
     """
 
     async def _handler(params: FunctionCallParams) -> None:
         query = params.arguments.get("query", "").strip()
+
+        if thinker is not None:
+            try:
+                logger.info(f"[deep_research] thinker call: {query!r}")
+                result = await thinker(query)
+                await params.result_callback(result)
+                return
+            except (httpx.ConnectError, httpx.ConnectTimeout, OSError) as e:
+                logger.warning(
+                    f"[deep_research] thinker unreachable "
+                    f"({type(e).__name__}: {e}); trying ava A2A next"
+                )
+            except Exception as e:
+                logger.exception(f"[deep_research] thinker error: {e}")
+                await params.result_callback(
+                    f"My research model errored out: {e}"
+                )
+                return
+
         ava = registry.get("ava")
         if ava:
             try:
@@ -265,13 +293,14 @@ def _deep_research_handler(registry: AgentRegistry):
                     f"Something went wrong asking our orchestrator: {e}"
                 )
                 return
-        # Synthetic fallback — ava not configured or unreachable.
+
+        # Synthetic fallback — neither thinker nor ava configured.
         logger.info(f"[deep_research] synthetic fallback: {query!r}")
         await asyncio.sleep(FAKE_RESEARCH_SECS)
         await params.result_callback(
-            f"I couldn't reach our research orchestrator, so here's a "
-            f"placeholder answer about '{query}' — set AVA_URL + AVA_API_KEY "
-            f"for real research."
+            f"No thinker or orchestrator is configured, so here's a "
+            f"placeholder answer about '{query}'. Set THINKER_URL or "
+            f"AVA_URL + AVA_API_KEY for real research."
         )
 
     return _handler
@@ -357,8 +386,14 @@ def register_tools(
     on_finish=None,
     delivery: DeliveryController | None = None,
     registry: AgentRegistry | None = None,
+    thinker=None,
 ) -> ToolsSchema:
-    """Attach handlers + return the schema for the LLMContext."""
+    """Attach handlers + return the schema for the LLMContext.
+
+    `thinker` (optional async callable) — receives the deep_research
+    query and returns the answer text. Wired by app.py from THINKER_URL
+    when set. Takes priority over A2A→ava when both are configured.
+    """
 
     registry = registry or AgentRegistry()  # empty is fine
 
@@ -380,7 +415,7 @@ def register_tools(
     llm.register_function("web_search", _wrap_sync(web_search_handler), cancel_on_interruption=True)
     llm.register_function(
         "deep_research",
-        _wrap_sync(_deep_research_handler(registry)),
+        _wrap_sync(_deep_research_handler(registry, thinker=thinker)),
         cancel_on_interruption=True,
     )
     llm.register_function(

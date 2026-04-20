@@ -174,6 +174,59 @@ def _build_turn_analyzer():
 # Module-level since pipeline is single-tenant for now.
 _ECHO_STATE = EchoGuardState()
 
+
+# ---------------------------------------------------------------------------
+# Thinker — direct LLM endpoint for deep_research (the heavier model in
+# the two-model split). Optional; if unset, deep_research falls through
+# to A2A→ava, then to a synthetic placeholder.
+# ---------------------------------------------------------------------------
+
+THINKER_URL = os.environ.get("THINKER_URL", "")
+THINKER_MODEL = os.environ.get("THINKER_MODEL", "")
+THINKER_API_KEY = os.environ.get("THINKER_API_KEY", "not-needed")
+THINKER_MAX_TOKENS = int(os.environ.get("THINKER_MAX_TOKENS", "400"))
+THINKER_TEMPERATURE = float(os.environ.get("THINKER_TEMPERATURE", "0.4"))
+THINKER_SYSTEM_PROMPT = os.environ.get(
+    "THINKER_SYSTEM_PROMPT",
+    "You are a research assistant. Answer the user's question thoroughly "
+    "but concisely (2-4 sentences). Plain text only — no markdown, no "
+    "lists. The answer will be spoken aloud verbatim.",
+)
+
+_thinker_client = None
+
+
+def _get_thinker_client():
+    global _thinker_client
+    if _thinker_client is None:
+        from openai import AsyncOpenAI
+        _thinker_client = AsyncOpenAI(api_key=THINKER_API_KEY, base_url=THINKER_URL)
+    return _thinker_client
+
+
+async def _thinker_call(query: str) -> str:
+    """One-shot non-streaming call to THINKER_URL. Returns plain answer text."""
+    r = await _get_thinker_client().chat.completions.create(
+        model=THINKER_MODEL,
+        messages=[
+            {"role": "system", "content": THINKER_SYSTEM_PROMPT},
+            {"role": "user", "content": query},
+        ],
+        max_tokens=THINKER_MAX_TOKENS,
+        temperature=THINKER_TEMPERATURE,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+    return (r.choices[0].message.content or "").strip()
+
+
+def _thinker_or_none():
+    """Returns the thinker callable if THINKER_URL+THINKER_MODEL are set,
+    else None — letting deep_research fall back to A2A→ava."""
+    if THINKER_URL and THINKER_MODEL:
+        logger.info(f"Thinker: {THINKER_URL} model={THINKER_MODEL}")
+        return _thinker_call
+    return None
+
 # Simple in-process counters for /api/metrics. Reset on process restart.
 _METRICS: dict = {
     "boot_at": time.time(),
@@ -338,7 +391,35 @@ async def run_bot(webrtc_connection) -> None:
         on_finish=_cancel_progress,
         delivery=delivery,
         registry=_AGENT_REGISTRY,
+        thinker=_thinker_or_none(),
     )
+
+    # Per-skill tool restriction. If skill.tools is non-empty, scope the
+    # ToolsSchema down to that allow-list — the LLM only SEES (and so
+    # only calls) the listed names. Handlers stay registered on the LLM
+    # service either way; if the schema doesn't expose them, they can't
+    # be reached.
+    if skill.tools:
+        from pipecat.adapters.schemas.tools_schema import ToolsSchema
+        allowed = set(skill.tools)
+        kept = [s for s in tools_schema.standard_tools if s.name in allowed]
+        unknown = allowed - {s.name for s in tools_schema.standard_tools}
+        if unknown:
+            logger.warning(
+                f"[skill] {skill.slug!r}: tools={list(unknown)} not in registry; "
+                "ignored"
+            )
+        if kept:
+            logger.info(
+                f"[skill] {skill.slug!r} restricted to tools: "
+                f"{[s.name for s in kept]}"
+            )
+            tools_schema = ToolsSchema(standard_tools=kept)
+        else:
+            logger.warning(
+                f"[skill] {skill.slug!r}: tools list matched zero registered tools; "
+                "exposing all (refuse to leave the agent toolless)"
+            )
 
     context = LLMContext(
         [{"role": "system", "content": _effective_prompt(skill, tts_backend)}],
@@ -552,6 +633,10 @@ async def health():
         "known_agents": _AGENT_REGISTRY.names(),
         "skill": _ACTIVE_SKILL_SLUG,
         "skills": list(_SKILLS.keys()),
+        "thinker": {
+            "configured": bool(THINKER_URL and THINKER_MODEL),
+            "model": THINKER_MODEL or None,
+        },
         "audio": {
             "half_duplex": HALF_DUPLEX,
             "echo_guard_ms": ECHO_GUARD_MS,
