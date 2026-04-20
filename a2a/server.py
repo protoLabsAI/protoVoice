@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 A2A_AUTH_TOKEN = os.environ.get("A2A_AUTH_TOKEN", "")  # shared secret for inbound auth
 AGENT_NAME = os.environ.get("AGENT_NAME", "protovoice")
-AGENT_VERSION = os.environ.get("AGENT_VERSION", "0.2.0")
+AGENT_VERSION = os.environ.get("AGENT_VERSION", "0.1.0")
 
 
 def _extract_user_text(params: dict) -> str:

@@ -1,6 +1,6 @@
-# Use LocalAI (or any all-API stack)
+# Use LocalAI / LiteLLM Gateway / OpenAI
 
-protoVoice's STT, LLM, and TTS are all swappable via env. Point them at [LocalAI](https://localai.io), [OpenRouter](https://openrouter.ai), OpenAI, [vllm-omni](https://github.com/vllm-omni/vllm-omni), or any mix — protoVoice doesn't need a single GPU on the host if you've already got those services running elsewhere.
+protoVoice's STT, LLM, and TTS are all swappable via env. Point them at [LocalAI](https://localai.io), a [LiteLLM proxy](https://docs.litellm.ai/docs/proxy/quick_start), [OpenRouter](https://openrouter.ai), OpenAI, [vllm-omni](https://github.com/vllm-omni/vllm-omni), or any mix — protoVoice doesn't need a single GPU on the host if you've already got those services running elsewhere.
 
 ## All-API setup (no in-process model loads)
 
@@ -97,3 +97,31 @@ docker compose up -d protovoice
 ```
 
 (The protovoice container has no GPU work to do; you can drop the `runtime: nvidia` and `device_ids` from the compose file in this configuration.)
+
+**LiteLLM Proxy** (e.g. the protoLabs `gateway:4000`): same config shape, single auth key, model names are whatever you registered in `litellm_config.yaml`.
+
+```bash
+START_VLLM=0 \
+LLM_URL=http://gateway:4000/v1 \
+LLM_SERVED_NAME=claude-opus-4-6 \
+LLM_API_KEY=$LITELLM_MASTER_KEY \
+\
+STT_BACKEND=openai \
+STT_URL=http://gateway:4000/v1 \
+STT_MODEL=whisper-1 \
+STT_API_KEY=$LITELLM_MASTER_KEY \
+\
+TTS_BACKEND=openai \
+TTS_OPENAI_URL=http://gateway:4000/v1 \
+TTS_OPENAI_MODEL=tts-1 \
+TTS_OPENAI_VOICE=alloy \
+TTS_OPENAI_API_KEY=$LITELLM_MASTER_KEY \
+\
+docker compose up -d protovoice
+```
+
+LiteLLM is route-shaped — it dispatches the model name to whatever provider you've configured (Anthropic, OpenAI, Bedrock, Vertex, your own vLLM, etc.) so a single `LLM_SERVED_NAME=claude-opus-4-6` might map to Anthropic while `tts-1` maps to OpenAI. Pick model names per-service from your `litellm_config.yaml`.
+
+::: tip
+LiteLLM by default requires the master key on every request. Get it set in the env (or use a virtual key per service for tighter scoping). The same key works for all three endpoints — there's no separate auth per modality.
+:::
