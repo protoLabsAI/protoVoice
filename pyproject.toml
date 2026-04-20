@@ -16,6 +16,7 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
+    "python-dotenv",
     "httpx",
     "soundfile",
     "soxr",

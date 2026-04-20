@@ -102,24 +102,26 @@ def tool_use_block(verbosity: Verbosity, tts_backend: str) -> str:
     return f"""\
 ## TOOL USE — speak BEFORE every tool call
 
-Whenever you call a tool, ALWAYS first emit one short preamble line in
-the response, THEN call the tool. The preamble is spoken aloud
-immediately so the user knows you heard them and are working.
+Whenever you call a tool, emit one short preamble line in the response
+FIRST, then call the tool. The preamble is spoken aloud immediately so
+the user knows you heard them and are working.
 
 Preamble length / tone: {length}
 
-CRITICAL — what the preamble must NOT do:
-  - never include a fact, name, number, date, or detail from the answer.
-    The actual answer comes after the tool returns.
-  - never restate the user's question.
-  - never claim what you found or will find.
-The preamble is ONLY about acknowledging that you're checking.
+REQUIRED:
+  - Every preamble you write must be different from the last one. Never
+    fall into a catch-phrase. If you said something filler-ish last
+    turn, pick a fresh shape this turn.
+  - Use the user's own wording when natural ("checking the weather in
+    Paris" is better than "checking that"). Stay abstract otherwise.
 
-Examples (do NOT copy verbatim — write your own each time):
-  "hmm, let me check"
-  "one sec"
-  "okay, looking that up"
-  "alright, give me a moment"
+FORBIDDEN:
+  - Never include a fact, name, number, date, or detail from the
+    actual answer — that comes AFTER the tool returns.
+  - Never restate the user's question.
+  - Never claim what you found or will find.
+  - Never speak the words "let me check that for you" or any close
+    paraphrase; pick something else.
 
 {style}
 """

@@ -6,6 +6,7 @@ __pycache__/
 *.key
 .env
 .env.*
+!.env.example
 
 # Node / VitePress
 # NB: package-lock.json IS committed — required by `npm ci` in docs workflow.

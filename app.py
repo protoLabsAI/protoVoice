@@ -30,6 +30,19 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+# Load .env BEFORE any other module reads os.environ. python-dotenv leaves
+# already-set env vars alone (shell env wins over .env — standard).
+# For deployed boxes, Infisical (or whichever secrets manager) injects
+# env vars at container start; this block then no-ops because the file
+# isn't there. Local dev + CI keep a .env; production doesn't.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # Missing dotenv shouldn't crash boot — secrets just have to come
+    # from the shell env in that case.
+    pass
+
 # Route HF downloads to the mounted model cache before transformers imports anything.
 os.environ.setdefault("HF_HOME", os.environ.get("MODEL_DIR", "/models"))
 

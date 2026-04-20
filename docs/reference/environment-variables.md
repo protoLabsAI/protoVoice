@@ -1,6 +1,12 @@
 # Environment Variables
 
-All values have sensible defaults. Set via shell, `docker compose` environment, or a `.env` file alongside `docker-compose.yml`.
+All values have sensible defaults. Set via (in order of precedence):
+
+1. Shell env / `docker compose environment:` — highest precedence
+2. A local `.env` file at the repo root (auto-loaded via python-dotenv at startup — gitignored; `.env.example` in the repo is the template)
+3. Built-in defaults in the code
+
+For deployed boxes, inject secrets via your secrets manager (Infisical, Vault, SOPS, k8s Secret + envFrom, etc.). The app reads `os.environ` — it doesn't care where values came from.
 
 ## Server
 
