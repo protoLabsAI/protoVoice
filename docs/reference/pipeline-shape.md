@@ -23,6 +23,12 @@ Pipeline([
 - **DeliveryController** watches the same VAD frames + `TranscriptionFrame` to decide when to drain queued push results. See [Delivery Policies](/guides/delivery-policies).
 - **MemoryManager** watches `LLMFullResponseEndFrame` for turn boundaries and triggers async pruning + summarization. See [Memory](/reference/memory).
 
+## Pre-tool acknowledgements
+
+Pipecat's `OpenAILLMService` streams text deltas to TTS *before* running function calls — this is what makes inline pre-tool preambles work. The model emits `"hmm, let me check"` as `delta.content` tokens, those tokens flow through TTS to the user, then the function call executes, then post-tool tokens flow back through TTS as the answer. One LLM call, one stream, no race conditions.
+
+The TOOL USE block in the system prompt (built by `agent/filler.tool_use_block`) instructs the model to do this on every tool call. See [Natural-Sounding Fillers](/explanation/natural-fillers).
+
 ## Key frame types
 
 Upstream (user → agent):

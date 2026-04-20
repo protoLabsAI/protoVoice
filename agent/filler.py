@@ -1,32 +1,22 @@
-"""Generative, backend-aware filler — the "thinking out loud" track.
+"""Filler generators for the channels that pipecat's main response stream
+can NOT cover natively:
 
-Replaces the old hardcoded phrase pools. Every filler line is generated
-fresh by a small local LLM, conditioned on:
+  - **progress**: periodic narration during a SLOW tool call. The LLM is
+    blocked waiting for the tool result, so it can't stream
+    "still looking..." itself — we have to fabricate it.
+  - **backchannel**: brief listener-acks ("mm-hmm", "yeah") fired DURING
+    the user's turn. The agent isn't producing a response at all in this
+    moment, so again pipecat's stream can't help.
 
-  - the user's last utterance (what are we checking?)
-  - the tool being dispatched (how should I acknowledge?)
-  - the TTS backend (tag-style prosody for Fish; plain text for Kokoro)
-  - recent fillers we've said this session (to avoid repetition)
-  - the requested verbosity level (silent / brief / narrated / chatty)
+The OPENING preamble before a tool call is no longer in this file —
+it's prompt-driven now. See `tool_use_block()` below; it gets appended
+to every persona's system prompt and instructs the LLM to emit 2-12
+words inline before each tool call. Pipecat's OpenAILLMService streams
+those tokens to TTS before running the function call. One LLM, one
+source of truth, no race conditions.
 
-Why generative: a rotating phrase pool saturates in ~10 turns and starts
-sounding like IVR. Generating per-turn keeps the filler novel and, more
-importantly, grounds it in the actual user query — see Sesame + OpenAI
-Realtime Prompting Guide + ElevenLabs Conversational AI.
-
-Why backend-aware: Fish Audio S2-Pro supports 15k+ inline prosody tags
-(`[softly]`, `[pause]`, `[hmm]`, `[thinking]`). Using them turns a filler
-from "announcement" into "actual hesitation." Kokoro has no equivalent —
-bracketed tags get spoken as literal `[softly]` sounds, which is worse
-than plain text. So we render differently per backend.
-
-Latency tiers control when filler fires at all:
-
-  FAST   — tools that typically return in <500ms (calculator, datetime).
-           Emit nothing. Filler would arrive AFTER the answer.
-  MEDIUM — 0.5-3s tools (web_search, deep_research). One opening line.
-  SLOW   — 3s+ tools (slow_research, long A2A calls). Opening + periodic
-           progress frames.
+Backend-aware rendering still applies — Fish gets `[softly]`/`[hmm]` tags;
+Kokoro gets plain text.
 """
 
 from __future__ import annotations
@@ -35,7 +25,7 @@ import asyncio
 import collections
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 from openai import AsyncOpenAI
@@ -51,16 +41,17 @@ class Verbosity(str, Enum):
 
 
 class Latency(str, Enum):
-    FAST = "fast"      # <500ms — no filler
-    MEDIUM = "medium"  # 0.5-3s — opening only
-    SLOW = "slow"      # 3s+ — opening + progress
+    FAST = "fast"      # <500ms — no preamble, no progress
+    MEDIUM = "medium"  # 0.5-3s — preamble (LLM-emitted), no progress
+    SLOW = "slow"      # 3s+ — preamble + periodic progress (this file)
 
 
 DEFAULT_VERBOSITY = Verbosity(os.environ.get("VERBOSITY", Verbosity.BRIEF.value).lower())
 
 
 # ---------------------------------------------------------------------------
-# Per-backend prompting — Fish gets tags; Kokoro gets plain.
+# Per-backend prompting style — used by both `tool_use_block` (for the
+# inline preamble the LLM emits) and `_generate` (for progress + backchannel).
 # ---------------------------------------------------------------------------
 
 _FISH_STYLE = """\
@@ -78,30 +69,70 @@ they get spoken as literal sounds. Convey hesitation with words alone:
 """
 
 
+def _backend_style(tts_backend: str) -> str:
+    return _FISH_STYLE if tts_backend == "fish" else _KOKORO_STYLE
+
+
 # ---------------------------------------------------------------------------
-# Verbosity → length + tone shaping
+# Verbosity → preamble length / tone in the system prompt
 # ---------------------------------------------------------------------------
 
-_VERBOSITY_STYLE = {
-    Verbosity.SILENT: None,  # no filler fires at all
-    Verbosity.BRIEF: (
-        "Extremely short — 2 to 4 words. Conversational. Low energy, "
-        "like you're half-thinking. Never announce."
-    ),
-    Verbosity.NARRATED: (
-        "Short — 3 to 8 words. Warm, natural. One beat of hesitation. "
-        "Ground it in the user's topic if obvious."
-    ),
-    Verbosity.CHATTY: (
-        "Up to 12 words. Natural, slightly expressive. Can include a "
-        "light observation or curiosity about the topic."
-    ),
+_PREAMBLE_LENGTH_BY_VERBOSITY: dict[Verbosity, str | None] = {
+    Verbosity.SILENT: None,  # no preamble at all
+    Verbosity.BRIEF: "2 to 4 words. Casual, low energy. Like 'one sec' or 'let me see'.",
+    Verbosity.NARRATED: "4 to 8 words. Warm, natural. May reference the topic abstractly ('let me look that up').",
+    Verbosity.CHATTY: "Up to 12 words. Slightly expressive. May add a tiny acknowledgement of the topic.",
 }
 
+
+def tool_use_block(verbosity: Verbosity, tts_backend: str) -> str:
+    """Returns the TOOL USE section appended to every persona's system
+    prompt. Encodes the inline preamble pattern: speak briefly BEFORE
+    every tool call, in the same response. Pipecat streams those tokens
+    to TTS before running the tool."""
+    if verbosity is Verbosity.SILENT:
+        return (
+            "## TOOL USE\n"
+            "When you call a tool, do NOT say anything before the call. "
+            "Make the tool call silently. Speak only the answer once the "
+            "tool returns."
+        )
+    length = _PREAMBLE_LENGTH_BY_VERBOSITY[verbosity]
+    style = _backend_style(tts_backend).strip()
+    return f"""\
+## TOOL USE — speak BEFORE every tool call
+
+Whenever you call a tool, ALWAYS first emit one short preamble line in
+the response, THEN call the tool. The preamble is spoken aloud
+immediately so the user knows you heard them and are working.
+
+Preamble length / tone: {length}
+
+CRITICAL — what the preamble must NOT do:
+  - never include a fact, name, number, date, or detail from the answer.
+    The actual answer comes after the tool returns.
+  - never restate the user's question.
+  - never claim what you found or will find.
+The preamble is ONLY about acknowledging that you're checking.
+
+Examples (do NOT copy verbatim — write your own each time):
+  "hmm, let me check"
+  "one sec"
+  "okay, looking that up"
+  "alright, give me a moment"
+
+{style}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Generator — for progress (during SLOW tool) + backchannel (during user)
+# ---------------------------------------------------------------------------
+
 _PROGRESS_STYLE = (
-    "Even shorter and softer than the opening — 2 to 5 words. "
+    "Even shorter and softer than a normal acknowledgement — 2 to 5 words. "
     "Feels like an under-breath continuation, not a new announcement. "
-    "Never repeat a previous filler or progress line."
+    "Never repeat any previous progress line."
 )
 
 _BACKCHANNEL_STYLE = (
@@ -112,48 +143,35 @@ _BACKCHANNEL_STYLE = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Settings + state
-# ---------------------------------------------------------------------------
-
 @dataclass
 class Settings:
     verbosity: Verbosity = DEFAULT_VERBOSITY
     progress_after_secs: float = 3.0
     progress_interval_secs: float = 4.0
-    recency_window: int = 6          # remember last N fillers per session
+    recency_window: int = 6
     max_gen_tokens: int = 30
-    temperature: float = 0.9          # higher = more variety
-    timeout_secs: float = 2.5         # if LLM is slow, give up — pipeline keeps going
+    temperature: float = 0.9
+    timeout_secs: float = 2.5
 
 
-class RecentFillers:
-    """Bounded ring of recent filler texts, joined and passed into the
-    generator prompt to discourage repetition."""
-
+class _Recent:
     def __init__(self, window: int = 6):
         self._buf: collections.deque[str] = collections.deque(maxlen=window)
 
     def remember(self, phrase: str) -> None:
-        phrase = (phrase or "").strip()
-        if phrase:
-            self._buf.append(phrase)
+        if phrase and phrase.strip():
+            self._buf.append(phrase.strip())
 
     def hint(self) -> str:
         if not self._buf:
             return ""
-        return "Recent fillers we've already said this session (AVOID repeating):\n" + "\n".join(
+        return "Recent lines we've already said this session (AVOID repeating):\n" + "\n".join(
             f"  - {p}" for p in self._buf
         )
 
 
-# ---------------------------------------------------------------------------
-# Generator
-# ---------------------------------------------------------------------------
-
-
 class FillerGenerator:
-    """Generates backend-aware filler via a small local LLM."""
+    """Generates progress narration + backchannels via the local routing LLM."""
 
     def __init__(
         self,
@@ -166,38 +184,11 @@ class FillerGenerator:
         self._client = AsyncOpenAI(api_key=api_key, base_url=llm_url)
         self._model = model
         self._settings = settings or Settings()
-        self._recent = RecentFillers(self._settings.recency_window)
+        self._recent = _Recent(self._settings.recency_window)
 
     @property
     def settings(self) -> Settings:
         return self._settings
-
-    # --- public API --------------------------------------------------------
-
-    async def opening(
-        self,
-        *,
-        tool_name: str,
-        tool_args: dict | None,
-        user_utterance: str | None,
-        tts_backend: str,
-    ) -> str | None:
-        """Generate a one-shot opening filler. Returns None if verbosity is
-        SILENT (caller should skip)."""
-        if self._settings.verbosity is Verbosity.SILENT:
-            return None
-        length_style = _VERBOSITY_STYLE[self._settings.verbosity]
-        phrase = await self._generate(
-            tool_name=tool_name,
-            tool_args=tool_args,
-            user_utterance=user_utterance,
-            tts_backend=tts_backend,
-            length_style=length_style,
-            kind="opening",
-        )
-        if phrase:
-            self._recent.remember(phrase)
-        return phrase
 
     async def progress(
         self,
@@ -206,100 +197,67 @@ class FillerGenerator:
         user_utterance: str | None,
         tts_backend: str,
     ) -> str | None:
-        """Generate a periodic progress filler for a long-running tool."""
+        """Periodic 'still working' line for a SLOW in-flight tool."""
         if self._settings.verbosity in (Verbosity.SILENT, Verbosity.BRIEF):
             return None
         phrase = await self._generate(
+            kind="progress",
+            length_style=_PROGRESS_STYLE,
             tool_name=tool_name,
-            tool_args=None,
             user_utterance=user_utterance,
             tts_backend=tts_backend,
-            length_style=_PROGRESS_STYLE,
-            kind="progress",
         )
         if phrase:
             self._recent.remember(phrase)
         return phrase
 
     async def backchannel(self, *, tts_backend: str) -> str | None:
-        """Generate a brief listener-ack ('mm-hmm', 'yeah') for use WHILE
-        the user is talking. Suppressed when verbosity is SILENT.
-
-        Renders quietly via [whisper]/[softly] tags on Fish; plain on Kokoro.
-        """
+        """One brief listener-ack while the user is talking."""
         if self._settings.verbosity is Verbosity.SILENT:
             return None
         phrase = await self._generate(
+            kind="backchannel",
+            length_style=_BACKCHANNEL_STYLE,
             tool_name="(listening)",
-            tool_args=None,
             user_utterance=None,
             tts_backend=tts_backend,
-            length_style=_BACKCHANNEL_STYLE,
-            kind="backchannel",
         )
         if not phrase:
             return None
-        # Wrap Fish output in soft/whisper for unobtrusive delivery.
+        # Wrap Fish output in [softly] for unobtrusive delivery.
         if tts_backend == "fish" and not phrase.startswith("["):
-            phrase = f"[whisper] [softly] {phrase}"
+            phrase = f"[softly] {phrase}"
         self._recent.remember(phrase)
         return phrase
-
-    # --- internal ----------------------------------------------------------
 
     async def _generate(
         self,
         *,
+        kind: str,
+        length_style: str,
         tool_name: str,
-        tool_args: dict | None,
         user_utterance: str | None,
         tts_backend: str,
-        length_style: str,
-        kind: str,
     ) -> str | None:
-        backend_style = _FISH_STYLE if tts_backend == "fish" else _KOKORO_STYLE
         system = (
-            "You generate ONE 'thinking out loud' filler line for a voice "
-            "agent that's about to run a tool. The filler will be spoken "
-            "immediately — it must sound like a natural in-line hesitation, "
-            "NOT an announcement or a sentence. Output ONLY the filler "
-            "text, no quotes, no markdown, no explanation.\n\n"
-            "CRITICAL — what filler must NOT do:\n"
-            "  - never include a factual answer, name, number, date, or "
-            "    detail from the user's topic. The actual answer comes "
-            "    AFTER this — saying any of it now causes the agent to "
-            "    speak the answer twice.\n"
-            "  - never restate the user's question or summarize what they "
-            "    asked.\n"
-            "  - never make claims about what you found or will find.\n"
-            "Filler is ONLY about the act of checking — referring to the "
-            "topic abstractly is fine ('let me look that up'), but never "
-            "concretely ('let me check John's name')."
+            f"You generate ONE '{kind}' line for a voice agent. The line "
+            "will be spoken immediately. Output ONLY the line, no quotes, "
+            "no markdown, no explanation."
         )
         user_parts = [
-            f"Tool the agent is about to run: {tool_name}",
+            f"Context: {tool_name}",
+            f"Length / tone: {length_style}",
+            "",
+            _backend_style(tts_backend).strip(),
         ]
-        if tool_args:
-            try:
-                args_preview = ", ".join(
-                    f"{k}={v!r}" for k, v in tool_args.items() if v
-                )[:160]
-                if args_preview:
-                    user_parts.append(f"Tool arguments: {args_preview}")
-            except Exception:
-                pass
         if user_utterance:
-            user_parts.append(f"User's last message: {user_utterance.strip()[:200]}")
-        user_parts.append("")
-        user_parts.append(f"Length / tone: {length_style}")
-        user_parts.append("")
-        user_parts.append(backend_style.strip())
+            user_parts.insert(1, f"User said: {user_utterance.strip()[:200]}")
         recent = self._recent.hint()
         if recent:
             user_parts.append("")
             user_parts.append(recent)
         user_parts.append("")
-        user_parts.append(f"Output the {kind} filler line and nothing else.")
+        user_parts.append(f"Output the {kind} line and nothing else.")
         user = "\n".join(user_parts)
 
         try:
@@ -324,13 +282,10 @@ class FillerGenerator:
             return None
 
         text = (r.choices[0].message.content or "").strip()
-        # Strip wrapping quotes the model sometimes adds.
         if text and text[0] in "\"'" and text[-1] in "\"'":
             text = text[1:-1].strip()
         if not text:
             return None
-        # Paranoia: if a Kokoro filler came back with bracketed tags, strip
-        # them so they don't get spoken as literal syllables.
         if tts_backend != "fish" and "[" in text:
             import re
             text = re.sub(r"\[[^\]]+\]", "", text).strip(" ,.;:")

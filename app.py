@@ -60,7 +60,13 @@ from a2a.registry import AgentRegistry
 from a2a.server import register_a2a_routes
 from agent.backchannel import BackchannelController
 from agent.delivery import DeliveryController
-from agent.filler import FillerGenerator, Latency, Settings as FillerSettings, Verbosity
+from agent.filler import (
+    FillerGenerator,
+    Latency,
+    Settings as FillerSettings,
+    Verbosity,
+    tool_use_block,
+)
 from agent.tools import ASYNC_TOOL_NAMES, latency_for, register_tools
 from memory.window import MemoryManager
 from skills.loader import load_skills, write_voice_clone_skill
@@ -126,8 +132,15 @@ def _active_skill() -> Skill:
     return _SKILLS.get(_ACTIVE_SKILL_SLUG) or _SKILLS[DEFAULT_SOUL_SLUG]
 
 
-def _effective_prompt(skill: Skill) -> str:
-    return _SYSTEM_PROMPT_ENV_OVERRIDE or skill.system_prompt
+def _effective_prompt(skill: Skill, tts_backend: str) -> str:
+    """Compose the system prompt = persona + TOOL USE block.
+
+    The TOOL USE block is verbosity-and-backend-aware — it instructs the
+    LLM to emit a brief preamble before each tool call (the new "filler"
+    primitive), with prosody guidance per backend.
+    """
+    base = _SYSTEM_PROMPT_ENV_OVERRIDE or skill.system_prompt
+    return base + "\n\n" + tool_use_block(_FILLER.verbosity, tts_backend)
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +280,7 @@ async def run_bot(webrtc_connection) -> None:
     )
 
     context = LLMContext(
-        [{"role": "system", "content": _effective_prompt(skill)}],
+        [{"role": "system", "content": _effective_prompt(skill, tts_backend)}],
         tools=tools_schema,
     )
 
@@ -305,12 +318,17 @@ async def run_bot(webrtc_connection) -> None:
     delivery.set_emitter(task.queue_frame)
     backchannel.set_emitter(task.queue_frame)
 
-    # --- Duplex speak-while-thinking (generative) ---
-    # Filler text is generated PER TURN by the small local LLM, with the
-    # user's last utterance + tool args + backend prosody style baked in.
-    # No phrase pools, no random choice — each filler is unique and
-    # context-aware. Latency tier per tool decides whether filler fires
-    # at all (FAST tools stay silent so the answer arrives first).
+    # --- Duplex speak-while-thinking ---
+    # Pre-tool acknowledgement ("hmm, let me check") is now emitted INLINE
+    # by the LLM — see the TOOL USE block in tool_use_block(). Pipecat's
+    # OpenAILLMService streams those tokens to TTS BEFORE running the
+    # function call, so the user hears them naturally.
+    #
+    # This file only handles the channels pipecat's main response stream
+    # cannot cover:
+    #   - SLOW tools: LLM is blocked on the result, can't narrate.
+    #     We synthesize "still working" lines via _FILLER_GEN.progress().
+    #   - Backchannels during the user's turn: see BackchannelController.
     progress_tasks: set[asyncio.Task] = set()
 
     def _last_user_text() -> str | None:
@@ -320,34 +338,24 @@ async def run_bot(webrtc_connection) -> None:
                 return c if isinstance(c, str) else str(c)
         return None
 
-    async def _generate_and_queue(coro_factory, tag: str) -> None:
-        """Run the generator off the critical path, queue the result if
-        anything came back. `append_to_context=False` keeps the filler
-        out of LLM history — otherwise the next response sees the filler
-        as if the assistant said it and may echo / extend it.
-        """
-        try:
-            phrase = await coro_factory()
-        except Exception as e:
-            logger.warning(f"[filler:{tag}] generator raised: {e}")
-            return
-        if phrase:
-            logger.info(f"[filler:{tag}] {phrase!r}")
-            await task.queue_frame(TTSSpeakFrame(phrase, append_to_context=False))
-
     async def _progress_loop(tool_name: str):
-        """Periodic generative progress for SLOW tools."""
         try:
             await asyncio.sleep(_FILLER.progress_after_secs)
             while True:
-                await _generate_and_queue(
-                    lambda: _FILLER_GEN.progress(
+                try:
+                    phrase = await _FILLER_GEN.progress(
                         tool_name=tool_name,
                         user_utterance=_last_user_text(),
                         tts_backend=tts_backend,
-                    ),
-                    tag="progress",
-                )
+                    )
+                except Exception as e:
+                    logger.warning(f"[filler:progress] generator raised: {e}")
+                    phrase = None
+                if phrase:
+                    logger.info(f"[filler:progress] {phrase!r}")
+                    await task.queue_frame(
+                        TTSSpeakFrame(phrase, append_to_context=False)
+                    )
                 await asyncio.sleep(_FILLER.progress_interval_secs)
         except asyncio.CancelledError:
             pass
@@ -355,42 +363,20 @@ async def run_bot(webrtc_connection) -> None:
     @llm.event_handler("on_function_calls_started")
     async def _on_tool_start(_svc, function_calls):
         names = [fc.function_name for fc in function_calls]
-        # When multiple tools dispatch in one turn, take the slowest tier.
         tier = max((latency_for(n) for n in names), key=lambda l: ["fast","medium","slow"].index(l.value))
         any_async = any(n in ASYNC_TOOL_NAMES for n in names)
-        primary = names[0]
-        primary_args = getattr(function_calls[0], "arguments", None) or {}
         logger.info(
-            f"[filler:open] tool={','.join(names)} tier={tier.value} "
-            f"verbosity={_FILLER.verbosity.value} async={any_async}"
+            f"[tool] {','.join(names)} tier={tier.value} async={any_async}"
         )
-        # Counters
         _METRICS["tool_calls_total"] += len(names)
         for n in names:
             _METRICS["tool_calls_by_name"][n] = _METRICS["tool_calls_by_name"].get(n, 0) + 1
 
-        # FAST tools are silent — filler would arrive after the answer.
-        if tier is Latency.FAST or _FILLER.verbosity is Verbosity.SILENT:
-            return
-
-        # Generate the opening filler off the critical path. If the tool
-        # finishes before the generator does, the filler is just dropped
-        # by pipecat after the response starts (or arrives slightly late;
-        # acceptable trade — see docs/explanation/natural-fillers.md).
-        asyncio.create_task(_generate_and_queue(
-            lambda: _FILLER_GEN.opening(
-                tool_name=primary,
-                tool_args=primary_args,
-                user_utterance=_last_user_text(),
-                tts_backend=tts_backend,
-            ),
-            tag="open",
-        ))
-
-        # SLOW tools also get a periodic progress generator. Async tools
-        # narrate themselves via the DeliveryController instead.
+        # Only SLOW sync tools get the progress narration loop. The opening
+        # acknowledgement is handled inline by the LLM via the TOOL USE
+        # prompt block. Async tools narrate themselves via DeliveryController.
         if tier is Latency.SLOW and not any_async:
-            progress_tasks.add(asyncio.create_task(_progress_loop(primary)))
+            progress_tasks.add(asyncio.create_task(_progress_loop(names[0])))
 
     @llm.event_handler("on_function_calls_cancelled")
     async def _on_tool_cancel(_svc, _calls):
