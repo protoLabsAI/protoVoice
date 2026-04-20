@@ -8,6 +8,7 @@ End-to-end: from zero to talking to protoVoice. About 5 minutes plus first-time 
 - Docker + `nvidia-container-toolkit`
 - ~15 GB free disk for HuggingFace model cache
 - For remote browsers: HTTPS is required for mic access. Easiest on a tailnet: `tailscale serve --bg 7867`.
+- **Headphones recommended.** Speaker → mic feedback can cause the bot to interrupt itself or hear its own voice. Headphones eliminate the acoustic loop entirely. If you can't use them, see [Audio Handling](/guides/audio-handling) for the echo-guard / half-duplex / noise-filter / smart-turn options.
 
 ## 1. Clone and boot
 

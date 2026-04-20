@@ -59,6 +59,13 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from a2a.registry import AgentRegistry
 from a2a.server import register_a2a_routes
 from agent.backchannel import BackchannelController
+from agent.echo_guard import (
+    ECHO_GUARD_MS,
+    HALF_DUPLEX,
+    EchoGuardObserver,
+    EchoGuardState,
+    EchoGuardSuppressor,
+)
 from agent.delivery import DeliveryController
 from agent.filler import (
     FillerGenerator,
@@ -115,6 +122,57 @@ _AGENT_REGISTRY = AgentRegistry(_AGENTS_YAML)
 # A2A callback route can speak push-notified results when a session is
 # active. None when no one's connected.
 _ACTIVE_DELIVERY: DeliveryController | None = None
+
+
+# ---------------------------------------------------------------------------
+# Audio + turn enhancements (echo guard already imported above)
+# Env-driven so the heavy/optional deps stay opt-in.
+# ---------------------------------------------------------------------------
+
+NOISE_FILTER = os.environ.get("NOISE_FILTER", "off").lower()  # off | rnnoise
+SMART_TURN = os.environ.get("SMART_TURN", "off").lower()      # off | local
+
+
+def _build_audio_in_filter():
+    """Return a BaseAudioFilter for TransportParams.audio_in_filter, or None."""
+    if NOISE_FILTER == "rnnoise":
+        try:
+            from pipecat.audio.filters.rnnoise_filter import RNNoiseFilter
+        except ImportError as e:
+            logger.error(
+                "NOISE_FILTER=rnnoise but pipecat[rnnoise] not installed: %s", e
+            )
+            return None
+        logger.info("Audio in-filter: RNNoise")
+        return RNNoiseFilter()
+    if NOISE_FILTER != "off":
+        logger.warning(f"Unknown NOISE_FILTER={NOISE_FILTER!r}; disabling")
+    return None
+
+
+def _build_turn_analyzer():
+    """Return a turn analyzer for LLMUserAggregatorParams, or None for
+    naive VAD-only behaviour."""
+    if SMART_TURN in ("local", "v3"):
+        try:
+            from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
+                LocalSmartTurnAnalyzerV3,
+            )
+        except ImportError as e:
+            logger.error(
+                "SMART_TURN=local but pipecat[local-smart-turn] not installed: %s", e
+            )
+            return None
+        logger.info("Turn analyzer: LocalSmartTurnAnalyzerV3 (bundled CPU model)")
+        return LocalSmartTurnAnalyzerV3()
+    if SMART_TURN != "off":
+        logger.warning(f"Unknown SMART_TURN={SMART_TURN!r}; disabling")
+    return None
+
+
+# Echo-guard state — shared across observer and suppressor for THIS session.
+# Module-level since pipeline is single-tenant for now.
+_ECHO_STATE = EchoGuardState()
 
 # Simple in-process counters for /api/metrics. Reset on process restart.
 _METRICS: dict = {
@@ -221,6 +279,9 @@ async def run_bot(webrtc_connection) -> None:
             audio_in_enabled=True,
             audio_out_enabled=True,
             audio_out_10ms_chunks=2,
+            # Optional in-filter (rnnoise) for noise reduction on the mic
+            # stream. Wired only when NOISE_FILTER is enabled in env.
+            audio_in_filter=_build_audio_in_filter(),
         ),
     )
 
@@ -287,11 +348,21 @@ async def run_bot(webrtc_connection) -> None:
     memory = MemoryManager(context, summarizer_llm=llm)
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(),
+            # Optional learned end-of-turn classifier — discriminates real
+            # turn-ends from mid-thought pauses + echo bleed. Wired only
+            # when SMART_TURN=local.
+            turn_analyzer=_build_turn_analyzer(),
+        ),
     )
 
     pipeline = Pipeline([
         transport.input(),
+        # Echo-guard sits IMMEDIATELY after transport.input — drops mic
+        # audio while the bot is speaking (HALF_DUPLEX) and for ECHO_GUARD_MS
+        # after it stops. VAD downstream never sees the suppressed audio.
+        EchoGuardSuppressor(_ECHO_STATE),
         stt,
         user_agg,
         # Both placed after user_agg — they need TranscriptionFrames and
@@ -310,6 +381,10 @@ async def run_bot(webrtc_connection) -> None:
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True),
+        # Observer keeps the echo-guard state in sync with bot speaking
+        # frames. Observers see every frame at the pipeline level without
+        # being a transformation node.
+        observers=[EchoGuardObserver(_ECHO_STATE)],
     )
 
     # Wire the delivery + backchannel controllers' out-of-band emit paths
@@ -477,6 +552,12 @@ async def health():
         "known_agents": _AGENT_REGISTRY.names(),
         "skill": _ACTIVE_SKILL_SLUG,
         "skills": list(_SKILLS.keys()),
+        "audio": {
+            "half_duplex": HALF_DUPLEX,
+            "echo_guard_ms": ECHO_GUARD_MS,
+            "noise_filter": NOISE_FILTER,
+            "smart_turn": SMART_TURN,
+        },
     }
 
 

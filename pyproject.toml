@@ -24,6 +24,13 @@ dependencies = [
     "ddgs",
 ]
 
+[project.optional-dependencies]
+# Heavy / opt-in audio quality extras. Install only when the matching
+# env (NOISE_FILTER, SMART_TURN) is enabled.
+rnnoise = ["pipecat-ai[rnnoise]"]
+smart-turn = ["pipecat-ai[local-smart-turn]"]
+audio = ["pipecat-ai[rnnoise,local-smart-turn]"]
+
 [project.scripts]
 protovoice = "app:main"
 

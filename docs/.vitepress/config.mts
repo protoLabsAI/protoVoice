@@ -43,6 +43,7 @@ export default defineConfig({
             { text: "Backchannels", link: "/guides/backchannels" },
             { text: "Delivery Policies", link: "/guides/delivery-policies" },
             { text: "Personas & Skills", link: "/guides/personas-and-skills" },
+            { text: "Audio Handling (echo / turn)", link: "/guides/audio-handling" },
             { text: "Build a Tool", link: "/guides/build-tools" },
             { text: "A2A Integration", link: "/guides/a2a-integration" },
             { text: "Benchmarking", link: "/guides/benchmarking" },

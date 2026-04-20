@@ -110,3 +110,14 @@ Add more as you extend the registry.
 |:---|:---|:---|
 | `BACKCHANNEL_FIRST_SECS` | `5.0` | Seconds into a user turn before the first backchannel fires |
 | `BACKCHANNEL_INTERVAL_SECS` | `6.0` | Interval between subsequent backchannels |
+
+## Audio handling (echo / feedback / turn)
+
+| Variable | Default | Purpose |
+|:---|:---|:---|
+| `ECHO_GUARD_MS` | `300` | Drop mic audio for this many ms after the bot stops speaking. `0` = disable. |
+| `HALF_DUPLEX` | `0` | `1` = mute mic entirely while bot speaks (loses barge-in, kills echo loops). |
+| `NOISE_FILTER` | `off` | `rnnoise` enables RNNoise filter on the mic stream. Requires `pip install -e .[rnnoise]`. |
+| `SMART_TURN` | `off` | `local` enables LocalSmartTurnAnalyzerV3 — learned end-of-turn detection. Requires `pip install -e .[smart-turn]`. |
+
+See [Audio Handling guide](/guides/audio-handling) for when to use which.
