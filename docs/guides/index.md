@@ -12,6 +12,10 @@ Task-oriented. Each page assumes you already know what you want to do — if you
 
 - [Use an External LLM](./external-llm) — point at a gateway, a remote vLLM, or OpenAI
 
+## All-API setup
+
+- [Use LocalAI (all-API)](./use-localai) — swap STT + TTS + LLM to OpenAI-compat endpoints; run protoVoice on a CPU box
+
 ## Voice agent behaviour
 
 - [Configure Verbosity](./verbosity) — tune filler chattiness (silent / brief / narrated / chatty)

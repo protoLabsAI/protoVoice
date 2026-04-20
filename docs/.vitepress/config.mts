@@ -38,6 +38,7 @@ export default defineConfig({
             { text: "Switch TTS Backend", link: "/guides/switch-tts-backend" },
             { text: "Clone a Voice", link: "/guides/clone-a-voice" },
             { text: "Use an External LLM", link: "/guides/external-llm" },
+            { text: "Use LocalAI (all-API)", link: "/guides/use-localai" },
             { text: "Configure Verbosity", link: "/guides/verbosity" },
             { text: "Backchannels", link: "/guides/backchannels" },
             { text: "Delivery Policies", link: "/guides/delivery-policies" },

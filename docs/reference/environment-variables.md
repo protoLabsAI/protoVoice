@@ -31,19 +31,28 @@ All values have sensible defaults. Set via shell, `docker compose` environment, 
 
 | Variable | Default | Purpose |
 |:---|:---|:---|
-| `WHISPER_MODEL` | `openai/whisper-large-v3-turbo` | HF model id for the STT pipeline |
+| `STT_BACKEND` | `local` | `local` (HF Whisper, in-process) or `openai` (any compat /v1/audio/transcriptions) |
+| `WHISPER_MODEL` | `openai/whisper-large-v3-turbo` | HF model id when `STT_BACKEND=local` |
+| `STT_URL` | `https://api.openai.com/v1` | Base URL when `STT_BACKEND=openai` |
+| `STT_MODEL` | `whisper-1` | Model name when `STT_BACKEND=openai` |
+| `STT_API_KEY` | `not-needed` | Bearer when `STT_BACKEND=openai` |
 
 ## TTS
 
 | Variable | Default | Purpose |
 |:---|:---|:---|
-| `TTS_BACKEND` | `fish` | `fish` or `kokoro` |
+| `TTS_BACKEND` | `fish` | `fish` (sidecar w/ cloning), `kokoro` (in-process), or `openai` (any compat /v1/audio/speech) |
 | `FISH_URL` | `http://fish-speech:8092` | Fish sidecar endpoint |
 | `FISH_REFERENCE_ID` | *(unset)* | Default saved voice reference |
 | `FISH_SAMPLE_RATE` | `44100` | Fish's native output SR |
 | `FISH_TIMEOUT` | `180` | Per-call timeout (seconds). Covers cold compile |
 | `KOKORO_VOICE` | `af_heart` | Kokoro preset voice |
 | `KOKORO_LANG` | `a` | Kokoro language code (`a` = American English, `b` = British, `j` = Japanese, …) |
+| `TTS_OPENAI_URL` | `https://api.openai.com/v1` | Base URL when `TTS_BACKEND=openai` |
+| `TTS_OPENAI_MODEL` | `tts-1` | Model name when `TTS_BACKEND=openai` |
+| `TTS_OPENAI_VOICE` | `alloy` | Voice id when `TTS_BACKEND=openai` |
+| `TTS_OPENAI_API_KEY` | `not-needed` | Bearer when `TTS_BACKEND=openai` |
+| `TTS_OPENAI_SAMPLE_RATE` | `24000` | Output SR claimed when `TTS_BACKEND=openai` |
 
 ## GPU / compose
 

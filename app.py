@@ -72,7 +72,7 @@ from memory.window import MemoryManager
 from skills.loader import load_skills, write_voice_clone_skill
 from skills.models import DEFAULT_SOUL_SLUG, Skill
 from voice import lifecycle
-from voice.stt import LocalWhisperSTT, prewarm as prewarm_stt, transcribe_bytes
+from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt, transcribe_bytes
 from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
 from voice.tts.fish import add_reference as fish_add_reference, list_references as fish_list_references
 
@@ -224,7 +224,7 @@ async def run_bot(webrtc_connection) -> None:
         ),
     )
 
-    stt = LocalWhisperSTT()
+    stt = make_stt()
     llm = OpenAILLMService(
         api_key=LLM_API_KEY,
         base_url=LLM_URL,
@@ -471,6 +471,7 @@ async def ice(req: SmallWebRTCPatchRequest):
 async def health():
     return {
         "status": "ok",
+        "stt_backend": STT_BACKEND,
         "tts_backend": TTS_BACKEND,
         "verbosity": _FILLER.verbosity.value,
         "known_agents": _AGENT_REGISTRY.names(),
@@ -554,6 +555,13 @@ async def voice_clone(
     """Upload a reference clip, optionally auto-transcribe, save on Fish,
     and create a new skill that uses it."""
     global _SKILLS
+    if TTS_BACKEND != "fish":
+        return {
+            "error": (
+                f"voice cloning requires TTS_BACKEND=fish (currently {TTS_BACKEND!r}). "
+                "OpenAI/Kokoro backends use preset voices only."
+            )
+        }
     slug = slug.strip().lower()
     if not _SLUG_RE.match(slug):
         return {"error": "slug must be lowercase letters/numbers/hyphens (2-64 chars)"}

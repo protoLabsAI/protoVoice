@@ -1,10 +1,12 @@
 """TTS backend selection.
 
-Two backends:
-  - fish   : Fish Audio S2-Pro sidecar (default). Supports voice cloning.
-  - kokoro : Local Kokoro 82M (fallback / low-latency preset voices).
+Three backends:
+  - fish    : Fish Audio S2-Pro sidecar — voice cloning, prosody tags
+  - kokoro  : Local Kokoro 82M, in-process — preset voices, low-latency
+  - openai  : Any OpenAI-compatible /v1/audio/speech endpoint (LocalAI,
+              OpenRouter, vllm-omni, OpenAI itself)
 
-Choose via env: TTS_BACKEND={fish|kokoro}
+Choose via env: TTS_BACKEND={fish|kokoro|openai}
 """
 
 import logging
@@ -25,15 +27,19 @@ def make_tts(**overrides) -> TTSService:
     if backend == "fish":
         from .fish import FishAudioTTS
         return FishAudioTTS(**overrides)
+    if backend == "openai":
+        from . import openai as openai_tts
+        return openai_tts.make(**overrides)
     raise ValueError(f"Unknown TTS backend: {backend!r}")
 
 
 def prewarm() -> None:
-    """Prewarm the configured backend so the first real request is fast."""
     if TTS_BACKEND == "kokoro":
         from .kokoro import prewarm as _prewarm
     elif TTS_BACKEND == "fish":
         from .fish import prewarm as _prewarm
+    elif TTS_BACKEND == "openai":
+        from .openai import prewarm as _prewarm
     else:
         logger.warning(f"No prewarm for backend {TTS_BACKEND!r}")
         return

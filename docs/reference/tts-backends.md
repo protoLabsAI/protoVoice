@@ -1,6 +1,6 @@
 # TTS Backends
 
-protoVoice has two pluggable backends. They subclass the same Pipecat `TTSService` base — the pipeline is identical; only the backend swaps.
+protoVoice has three pluggable backends — `fish` (sidecar w/ cloning), `kokoro` (in-process, low-latency), and `openai` (any compat endpoint: LocalAI / OpenRouter / OpenAI itself). They all subclass the same Pipecat `TTSService` base — the pipeline is identical; only the backend swaps.
 
 ## Fish Audio S2-Pro
 
@@ -70,14 +70,32 @@ See the [Kokoro HF card](https://huggingface.co/hexgrad/Kokoro-82M). Quick refer
 
 Note that prefixes mean: `af` = American female, `am` = American male, `bf` / `bm` = British female / male.
 
+## OpenAI-compatible
+
+Hits any `POST /v1/audio/speech` endpoint — OpenAI, LocalAI, OpenRouter, vllm-omni, etc.
+
+### Env
+
+| Variable | Default | Purpose |
+|:---|:---|:---|
+| `TTS_OPENAI_URL` | `https://api.openai.com/v1` | Base URL |
+| `TTS_OPENAI_MODEL` | `tts-1` | Model id |
+| `TTS_OPENAI_VOICE` | `alloy` | Voice id |
+| `TTS_OPENAI_API_KEY` | `not-needed` | Bearer for auth |
+| `TTS_OPENAI_SAMPLE_RATE` | `24000` | Output SR claim |
+
+### Latency
+
+Network-dependent. Local LAN endpoint: ~200-400 ms TTFA. Cloud (OpenAI): ~400-800 ms TTFA for `tts-1`, more for `tts-1-hd`.
+
 ## Choosing between them
 
-| | Fish | Kokoro |
-|:---|:---|:---|
-| Latency | 400-800 ms TTFA steady | ~50 ms/chunk |
-| Quality | Excellent, natural | Good, slightly robotic |
-| Cloning | ✓ | ✗ |
-| Prosody tags | ✓ (15 k+) | ✗ |
-| VRAM | ~22 GB (separate GPU) | ~2 GB (in-process) |
-| Cold compile | ~2 min | ~2 s |
-| Extra container | Yes | No |
+| | Fish | Kokoro | OpenAI-compat |
+|:---|:---|:---|:---|
+| Latency | 400-800 ms TTFA | ~50 ms/chunk | network-dependent |
+| Quality | Excellent, natural | Good, slightly robotic | depends on model behind |
+| Cloning | ✓ | ✗ | ✗ |
+| Prosody tags | ✓ (15 k+) | ✗ | depends on model |
+| VRAM (this host) | ~22 GB on a separate GPU | ~2 GB in-process | 0 (remote) |
+| Cold compile | ~2 min | ~2 s | n/a |
+| Extra container | Yes (sidecar) | No | No |
