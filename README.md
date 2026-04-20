@@ -1,124 +1,75 @@
 # protoVoice
 
-![protoVoice](https://i.ibb.co/ynptrxys/Screenshot-2026-03-27-at-5-17-20-PM.png)
-
-Sub-200ms real-time voice agent. Speak and get spoken responses faster than human conversational turn-taking.
+Full-duplex voice agent. Speak, get spoken replies fast; the agent speaks *before* it's done thinking, can push async results back mid-conversation, and can delegate to other agents or bigger LLMs when it needs to.
 
 ```
-Mic → [Silero VAD] → [Whisper Turbo] → [Qwen 4B] → [Kokoro TTS] → Speaker
-        ~1ms             ~55ms            ~150ms        ~50ms
+browser mic → WebRTC → STT → router LLM → TTS → speaker
+                              │
+                              └─ calls a tool → speaks a preamble inline →
+                                 (sync: web_search, calculator, datetime)
+                                 (delegate: ava, opus, any OpenAI-compat)
+                                 (async: slow_research — you keep talking;
+                                  agent drops the answer in at next silence)
 ```
 
-**165ms time-to-first-audio. 210ms end-to-end. Zero cold start.**
+Built on [Pipecat](https://docs.pipecat.ai) 1.0.
 
-## Quick Start
+## Quick start
 
 ```bash
-# Docker (single GPU, downloads ~12GB of models on first run)
+git clone https://github.com/protoLabsAI/protoVoice.git
+cd protoVoice
+cp .env.example .env      # edit for any secrets (AVA_API_KEY, LITELLM_MASTER_KEY, etc.)
 docker compose up -d
-
-# Or native
-pip install -e .
-python app.py
 ```
 
-UI at `http://localhost:7866`. For remote access with mic (HTTPS required), use a reverse proxy or `tailscale funnel 7866`.
+UI at `http://localhost:7866`. Browsers require HTTPS for mic access on non-localhost — use `tailscale serve 7866` (tailnet-only HTTPS) or a reverse proxy with TLS. Headphones recommended — see [audio handling](https://protolabsai.github.io/protoVoice/guides/audio-handling/) for speaker-echo mitigations.
 
-## How It Works
+## What you get
 
-1. **Silero VAD** detects when you stop speaking (~1ms, CPU)
-2. **Whisper large-v3-turbo** transcribes your speech (~55ms on GPU)
-3. **Qwen3.5-4B** streams a response token-by-token (~150ms to first clause)
-4. **Sentence chunker** detects boundaries in the token stream
-5. **Kokoro 82M** synthesizes each chunk immediately (~50ms per chunk)
-6. **Audio plays** before the LLM finishes generating
+- **Pipecat pipeline** — WebRTC, VAD, streaming STT → LLM → TTS, barge-in
+- **Inline preamble** — the router LLM speaks "hmm, let me check" *before* calling a tool, in the same response stream (no second LLM call, no race conditions). Details in [natural-fillers](https://protolabsai.github.io/protoVoice/explanation/natural-fillers/).
+- **Delegates** — a single `delegate_to(target, query)` tool covering both A2A agents AND OpenAI-compatible LLM endpoints. Configured in `config/delegates.yaml`; the LLM picks targets by the descriptions you write.
+- **Async tools** — `slow_research`-style work can return later; pipecat injects the result as a developer message when ready, and the LLM speaks it at the next pipeline opportunity.
+- **Voice cloning in-browser** — upload a 10-30 s clip, auto-transcribed by Whisper, saved on Fish Audio, registered as a new skill. Instant new voice, no restart.
+- **Personas & skills** — `config/SOUL.md` + `config/skills/*.yaml` for swappable personas with per-skill TTS voice, LLM tuning, and tool restrictions.
+- **A2A both ways** — outbound via `delegate_to`; inbound via `/a2a` JSON-RPC so other fleet agents can call *us* (text-only).
+- **Sliding-window memory** — with background LLM summarization when context grows.
+- **Pluggable backends** — STT and TTS both swappable via env (`STT_BACKEND=local|openai`, `TTS_BACKEND=fish|kokoro|openai`). Run fully API-backed via LocalAI, LiteLLM, OpenAI — no GPU on the protovoice container needed. See the [use-localai guide](https://protolabsai.github.io/protoVoice/guides/use-localai/).
 
-All models pre-warmed on startup (~5s boot). No cold start penalty.
+## Stack defaults
 
-## Benchmarks
-
-Measured on NVIDIA RTX PRO 6000 Blackwell (96GB):
-
-| Metric | Value |
-|--------|-------|
-| **Time to first audio (TTFA)** | **165ms avg** (150-180ms) |
-| **Total end-to-end** | **210ms avg** (190-230ms) |
-| STT (Whisper large-v3-turbo) | 55ms |
-| LLM (Qwen3.5-4B, streaming) | 150ms |
-| TTS (Kokoro 82M, chunked) | 50ms/chunk |
-| Cold start (first turn) | 0ms (pre-warmed) |
-
-165ms TTFA is faster than human conversational turn-taking (~300ms).
-
-## Features
-
-- **Streaming pipeline**: LLM tokens stream through a sentence chunker to TTS — audio plays while the LLM is still generating
-- **Interruption**: Start speaking mid-response and it stops, listens, responds to the new input
-- **Context memory**: Sliding window of 10 turns with automatic summarization of older context
-- **Self-contained**: Built-in vLLM server for the LLM, or connect to an external one
-- **Auth**: Optional login protection via `GRADIO_AUTH`
+| Layer | Default |
+|:---|:---|
+| STT | HF Whisper large-v3-turbo (GPU, in-process) |
+| Router LLM | local vLLM (Qwen3.5-4B — any OpenAI-compat works) |
+| TTS | Fish Audio S2-Pro sidecar (`--half --compile`; ~400-800 ms TTFA); Kokoro 82M (~50 ms) and OpenAI-compat endpoints also selectable |
+| Transport | Pipecat `SmallWebRTCTransport` |
+| Delegates | ava (at `https://ava.proto-labs.ai/v1`) — add more in `config/delegates.yaml` |
 
 ## Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `7866` | Web UI port |
-| `LLM_MODEL` | `Qwen/Qwen3.5-4B` | LLM model (any vLLM-compatible) |
-| `WHISPER_MODEL` | `openai/whisper-large-v3-turbo` | STT model |
-| `KOKORO_VOICE` | `af_heart` | TTS voice ([54 options](https://huggingface.co/hexgrad/Kokoro-82M)) |
-| `KOKORO_LANG` | `a` | Language (`a`=American, `b`=British, `j`=Japanese, etc.) |
-| `SYSTEM_PROMPT` | (conversational assistant) | LLM system prompt |
-| `GRADIO_AUTH` | (none) | Login auth, format: `user:pass,user2:pass2` |
-| `START_VLLM` | `1` | Set `0` to use external LLM |
-| `LLM_URL` | `http://localhost:8100/v1` | External LLM endpoint (when `START_VLLM=0`) |
-| `HF_HOME` | `/models` | HuggingFace cache directory |
-| `NVIDIA_VISIBLE_DEVICES` | `0` | GPU to use |
+Everything's env-driven. `cp .env.example .env` and edit — all 44+ env vars are documented there and in [Environment Variables](https://protolabsai.github.io/protoVoice/reference/environment-variables/). Defaults work for a single-GPU homelab install.
 
-## GPU Memory Budget (single GPU)
+For production boxes, inject secrets via Infisical / Vault / k8s Secret + envFrom — the app reads `os.environ` and doesn't care where values came from.
 
-| Component | VRAM |
-|-----------|:----:|
-| Whisper large-v3-turbo | ~6 GB |
-| Qwen3.5-4B (vLLM, 40% util) | ~15 GB |
-| Kokoro 82M | ~2 GB |
-| **Total** | **~23 GB** |
+## Docs
 
-Fits on any GPU with 24GB+ VRAM. On larger GPUs, increase `--gpu-memory-utilization` for more KV cache (longer conversations, higher concurrency).
+Full site: **https://protolabsai.github.io/protoVoice/** — Diátaxis-organized (tutorials / guides / reference / explanation).
 
-## Using an External LLM
+Common starting points:
 
-To use a larger/faster LLM running elsewhere:
+- [First Voice Session](https://protolabsai.github.io/protoVoice/tutorials/first-voice-session/) — clone, configure, talk
+- [Build a Tool](https://protolabsai.github.io/protoVoice/guides/build-tools/) — sync vs async, the `result_callback` gotcha
+- [Delegates](https://protolabsai.github.io/protoVoice/reference/delegates/) — add an A2A agent or OpenAI endpoint
+- [Audio Handling](https://protolabsai.github.io/protoVoice/guides/audio-handling/) — echo guard, half-duplex, noise filter, smart-turn
+- [Two-Model Split](https://protolabsai.github.io/protoVoice/explanation/two-model-split/) — router LLM vs. delegated thinker pattern
 
-```bash
-START_VLLM=0 LLM_URL=http://your-vllm-host:8000/v1 python app.py
-```
+## Release pipeline
 
-This skips the built-in vLLM and connects to your existing endpoint. Works with any OpenAI-compatible API.
-
-## Architecture
-
-```
-                    ┌─────────────────────────────────┐
-                    │          protoVoice              │
-                    │                                  │
-  Mic (WebRTC) ───►│  Silero VAD                      │
-                    │      │                           │
-                    │      ▼                           │
-                    │  Whisper STT (GPU)               │
-                    │      │                           │
-                    │      ▼                           │
-                    │  Qwen 4B via vLLM ──► streaming  │
-                    │      │                  tokens   │
-                    │      ▼                           │
-                    │  Sentence Chunker                │
-                    │      │                           │
-                    │      ▼                           │
-                    │  Kokoro TTS (GPU) ──► audio      │
-                    │      │                chunks     │
-  Speaker ◄────────│──────┘                           │
-    (WebRTC)       │                                  │
-                    └─────────────────────────────────┘
-```
+- Push to `main` → GHCR `:latest` + `sha-<short>` images via `.github/workflows/docker-publish.yml`
+- `vX.Y.Z` tag → stable semver images + GitHub release via `.github/workflows/release.yml`
+- Manual `workflow_dispatch` on `prepare-release.yml` → bumps version, opens + auto-merges the release PR, tags
 
 ## License
 
