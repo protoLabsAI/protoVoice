@@ -58,9 +58,10 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from a2a.registry import AgentRegistry
 from a2a.server import register_a2a_routes
+from agent.backchannel import BackchannelController
 from agent.delivery import DeliveryController
-from agent.filler import Settings as FillerSettings, Verbosity, opening_filler, progress_filler
-from agent.tools import ASYNC_TOOL_NAMES, register_tools
+from agent.filler import FillerGenerator, Latency, Settings as FillerSettings, Verbosity
+from agent.tools import ASYNC_TOOL_NAMES, latency_for, register_tools
 from memory.window import MemoryManager
 from skills.loader import load_skills, write_voice_clone_skill
 from skills.models import DEFAULT_SOUL_SLUG, Skill
@@ -90,6 +91,15 @@ _SYSTEM_PROMPT_ENV_OVERRIDE = os.environ.get("SYSTEM_PROMPT") or None
 # Session-level filler settings. Module singleton for M5; per-session
 # keying lands with multi-tenant in a later milestone.
 _FILLER = FillerSettings()
+
+# Generative filler — one module-level instance sharing the same local
+# LLM endpoint that the voice pipeline uses. Cheap to keep warm.
+_FILLER_GEN = FillerGenerator(
+    llm_url=LLM_URL,
+    model=LLM_SERVED_NAME,
+    api_key=LLM_API_KEY,
+    settings=_FILLER,
+)
 
 # Agent registry — loaded once at boot, shared across all sessions.
 _AGENTS_YAML = Path(os.environ.get("AGENTS_YAML", "config/agents.yaml"))
@@ -233,6 +243,10 @@ async def run_bot(webrtc_connection) -> None:
     # Delivery controller — observes VAD + transcripts, drains push deliveries.
     delivery = DeliveryController()
 
+    # Backchannel controller — emits brief listener-acks ("mm-hmm") during
+    # long user utterances. Reuses the shared FillerGenerator.
+    backchannel = BackchannelController(generator=_FILLER_GEN, tts_backend=tts_backend)
+
     # `_cancel_progress` is defined below; register_tools captures it via
     # closure so each SYNC tool handler auto-stops the progress loop on return.
     def _cancel_progress():
@@ -262,9 +276,9 @@ async def run_bot(webrtc_connection) -> None:
         transport.input(),
         stt,
         user_agg,
-        # Placed after user_agg so it sees TranscriptionFrames and VAD frames
-        # produced by the aggregator. Its downstream push_frame goes straight
-        # to TTS → transport output.
+        # Both placed after user_agg — they need TranscriptionFrames and
+        # VAD frames produced by the aggregator. Push downstream into TTS.
+        backchannel,
         delivery,
         llm,
         tts,
@@ -280,27 +294,52 @@ async def run_bot(webrtc_connection) -> None:
         params=PipelineParams(enable_metrics=True),
     )
 
-    # Wire the delivery controller's out-of-band emit path now that the task
-    # exists. queue_frame is the only safe way to inject frames from a
-    # foreign coroutine (e.g. the slow_research background task).
+    # Wire the delivery + backchannel controllers' out-of-band emit paths
+    # now that the task exists. queue_frame is the only safe way to inject
+    # frames from a foreign coroutine.
     delivery.set_emitter(task.queue_frame)
+    backchannel.set_emitter(task.queue_frame)
 
-    # --- Duplex speak-while-thinking ---
-    # When the LLM dispatches a tool, queue an immediate TTSSpeakFrame so
-    # the user hears a filler phrase while the tool runs, plus periodic
-    # progress updates. register_tools(on_finish=...) above captures the
-    # cancel hook so handlers auto-stop the progress loop on return.
+    # --- Duplex speak-while-thinking (generative) ---
+    # Filler text is generated PER TURN by the small local LLM, with the
+    # user's last utterance + tool args + backend prosody style baked in.
+    # No phrase pools, no random choice — each filler is unique and
+    # context-aware. Latency tier per tool decides whether filler fires
+    # at all (FAST tools stay silent so the answer arrives first).
     progress_tasks: set[asyncio.Task] = set()
 
-    async def _progress_loop():
-        """Emit periodic progress fillers if the tool drags on."""
+    def _last_user_text() -> str | None:
+        for m in reversed(context.messages):
+            if m.get("role") == "user" and m.get("content"):
+                c = m["content"]
+                return c if isinstance(c, str) else str(c)
+        return None
+
+    async def _generate_and_queue(coro_factory, tag: str) -> None:
+        """Run the generator off the critical path, queue the result if
+        anything came back."""
+        try:
+            phrase = await coro_factory()
+        except Exception as e:
+            logger.warning(f"[filler:{tag}] generator raised: {e}")
+            return
+        if phrase:
+            logger.info(f"[filler:{tag}] {phrase!r}")
+            await task.queue_frame(TTSSpeakFrame(phrase))
+
+    async def _progress_loop(tool_name: str):
+        """Periodic generative progress for SLOW tools."""
         try:
             await asyncio.sleep(_FILLER.progress_after_secs)
             while True:
-                phrase = progress_filler(_FILLER)
-                if phrase:
-                    logger.info(f"[filler:progress] {phrase!r}")
-                    await task.queue_frame(TTSSpeakFrame(phrase))
+                await _generate_and_queue(
+                    lambda: _FILLER_GEN.progress(
+                        tool_name=tool_name,
+                        user_utterance=_last_user_text(),
+                        tts_backend=tts_backend,
+                    ),
+                    tag="progress",
+                )
                 await asyncio.sleep(_FILLER.progress_interval_secs)
         except asyncio.CancelledError:
             pass
@@ -308,24 +347,42 @@ async def run_bot(webrtc_connection) -> None:
     @llm.event_handler("on_function_calls_started")
     async def _on_tool_start(_svc, function_calls):
         names = [fc.function_name for fc in function_calls]
+        # When multiple tools dispatch in one turn, take the slowest tier.
+        tier = max((latency_for(n) for n in names), key=lambda l: ["fast","medium","slow"].index(l.value))
         any_async = any(n in ASYNC_TOOL_NAMES for n in names)
+        primary = names[0]
+        primary_args = getattr(function_calls[0], "arguments", None) or {}
         logger.info(
-            f"[filler:open] tool={','.join(names)} "
+            f"[filler:open] tool={','.join(names)} tier={tier.value} "
             f"verbosity={_FILLER.verbosity.value} async={any_async}"
         )
         # Counters
         _METRICS["tool_calls_total"] += len(names)
         for n in names:
             _METRICS["tool_calls_by_name"][n] = _METRICS["tool_calls_by_name"].get(n, 0) + 1
-        phrase = opening_filler(_FILLER)
-        if phrase:
-            await task.queue_frame(TTSSpeakFrame(phrase))
-        # Async tools drive their own narration via the DeliveryController
-        # when they complete. Running the progress loop for them leaks a
-        # never-cancelled asyncio task (on_finish doesn't fire — the sync
-        # wrapper isn't on their path) and the user hears filler forever.
-        if not any_async:
-            progress_tasks.add(asyncio.create_task(_progress_loop()))
+
+        # FAST tools are silent — filler would arrive after the answer.
+        if tier is Latency.FAST or _FILLER.verbosity is Verbosity.SILENT:
+            return
+
+        # Generate the opening filler off the critical path. If the tool
+        # finishes before the generator does, the filler is just dropped
+        # by pipecat after the response starts (or arrives slightly late;
+        # acceptable trade — see docs/explanation/natural-fillers.md).
+        asyncio.create_task(_generate_and_queue(
+            lambda: _FILLER_GEN.opening(
+                tool_name=primary,
+                tool_args=primary_args,
+                user_utterance=_last_user_text(),
+                tts_backend=tts_backend,
+            ),
+            tag="open",
+        ))
+
+        # SLOW tools also get a periodic progress generator. Async tools
+        # narrate themselves via the DeliveryController instead.
+        if tier is Latency.SLOW and not any_async:
+            progress_tasks.add(asyncio.create_task(_progress_loop(primary)))
 
     @llm.event_handler("on_function_calls_cancelled")
     async def _on_tool_cancel(_svc, _calls):

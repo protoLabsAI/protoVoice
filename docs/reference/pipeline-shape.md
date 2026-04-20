@@ -9,15 +9,19 @@ Pipeline([
     transport.input(),     # SmallWebRTCInputTransport — mic RTP → AudioRawFrame
     stt,                   # LocalWhisperSTT — HF Whisper large-v3-turbo
     user_agg,              # LLMUserAggregator — VAD turn-taking + context build
+    backchannel,           # BackchannelController — "mm-hmm" during long user turns (M9)
     delivery,              # DeliveryController — drains push-results (M3+)
     llm,                   # OpenAILLMService — vLLM / external
     tts,                   # FishAudioTTS or LocalKokoroTTS
     transport.output(),    # SmallWebRTCOutputTransport — TTS → RTP → speaker
     assistant_agg,         # LLMAssistantAggregator — records agent turns into context
+    memory,                # MemoryManager — sliding window + summary (M5)
 ])
 ```
 
-**DeliveryController** watches `UserStartedSpeakingFrame` / `UserStoppedSpeakingFrame` / `TranscriptionFrame` to decide when to drain queued push results. See [Delivery Policies](/guides/delivery-policies).
+- **BackchannelController** watches `UserStartedSpeakingFrame` / `UserStoppedSpeakingFrame` to fire brief listener-acks during long user utterances. See [Backchannels](/guides/backchannels).
+- **DeliveryController** watches the same VAD frames + `TranscriptionFrame` to decide when to drain queued push results. See [Delivery Policies](/guides/delivery-policies).
+- **MemoryManager** watches `LLMFullResponseEndFrame` for turn boundaries and triggers async pruning + summarization. See [Memory](/reference/memory).
 
 ## Key frame types
 

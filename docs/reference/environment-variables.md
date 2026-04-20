@@ -94,3 +94,10 @@ Add more as you extend the registry.
 | `AGENT_NAME` | `protovoice` | Advertised name in the agent card |
 | `AGENT_VERSION` | `0.2.0` | Advertised version in the agent card |
 | `A2A_MAX_TURNS` | `10` | Per-contextId history cap for inbound text turns |
+
+## Backchannels
+
+| Variable | Default | Purpose |
+|:---|:---|:---|
+| `BACKCHANNEL_FIRST_SECS` | `5.0` | Seconds into a user turn before the first backchannel fires |
+| `BACKCHANNEL_INTERVAL_SECS` | `6.0` | Interval between subsequent backchannels |

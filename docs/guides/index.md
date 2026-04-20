@@ -15,6 +15,7 @@ Task-oriented. Each page assumes you already know what you want to do — if you
 ## Voice agent behaviour
 
 - [Configure Verbosity](./verbosity) — tune filler chattiness (silent / brief / narrated / chatty)
+- [Backchannels](./backchannels) — listener-acks ("mm-hmm") during long user turns
 - [Delivery Policies](./delivery-policies) — `now` / `next_silence` / `when_asked` for async tool results
 - [Personas & Skills](./personas-and-skills) — swap voice + system prompt per skill YAML
 

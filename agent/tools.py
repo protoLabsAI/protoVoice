@@ -36,6 +36,7 @@ from a2a.client import A2ADispatchError, dispatch_message
 from a2a.registry import AgentRegistry
 
 from .delivery import DeliveryController, DeliveryPolicy
+from .filler import Latency
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,21 @@ logger = logging.getLogger(__name__)
 # app.py reads this to suppress the progress-filler loop, which otherwise
 # leaks forever because the on_finish hook only fires on sync tools.
 ASYNC_TOOL_NAMES: frozenset[str] = frozenset({"slow_research"})
+
+# Expected-latency hint per tool. Drives whether opening-filler and
+# progress-filler fire at all (see agent/filler.py::Latency).
+TOOL_LATENCY: dict[str, Latency] = {
+    "calculator":     Latency.FAST,    # pure Python, instant
+    "get_datetime":   Latency.FAST,    # timezone lookup, instant
+    "web_search":     Latency.MEDIUM,  # DDGS typically 1-3s
+    "deep_research":  Latency.MEDIUM,  # ava A2A or 4s synthetic
+    "a2a_dispatch":   Latency.MEDIUM,  # varies by target; MEDIUM is a safe default
+    "slow_research":  Latency.SLOW,    # 20s+ by design
+}
+
+
+def latency_for(tool_name: str) -> Latency:
+    return TOOL_LATENCY.get(tool_name, Latency.MEDIUM)
 
 # Tunables — let us stress-test filler + progress + delivery independently.
 FAKE_RESEARCH_SECS = float(os.environ.get("FAKE_RESEARCH_SECS", "4"))
