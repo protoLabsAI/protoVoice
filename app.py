@@ -151,21 +151,26 @@ def _build_audio_in_filter():
     return None
 
 
-def _build_turn_analyzer():
-    """Return a turn analyzer for LLMUserAggregatorParams, or None for
-    naive VAD-only behaviour."""
+def _build_user_turn_strategies():
+    """Return a `UserTurnStrategies` object wrapping a smart-turn analyzer,
+    or None for naive VAD-only behaviour. Smart-turn discriminates real
+    turn-ends from mid-thought pauses + echo bleed."""
     if SMART_TURN in ("local", "v3"):
         try:
             from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
                 LocalSmartTurnAnalyzerV3,
             )
+            from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
+            from pipecat.turns.user_turn_strategies import UserTurnStrategies
         except ImportError as e:
             logger.error(
                 "SMART_TURN=local but pipecat[local-smart-turn] not installed: %s", e
             )
             return None
         logger.info("Turn analyzer: LocalSmartTurnAnalyzerV3 (bundled CPU model)")
-        return LocalSmartTurnAnalyzerV3()
+        return UserTurnStrategies(
+            stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())]
+        )
     if SMART_TURN != "off":
         logger.warning(f"Unknown SMART_TURN={SMART_TURN!r}; disabling")
     return None
@@ -374,15 +379,15 @@ async def run_bot(webrtc_connection) -> None:
     )
 
     memory = MemoryManager(context, summarizer_llm=llm)
+    _turn_strategies = _build_user_turn_strategies()
+    _user_agg_kwargs: dict = {"vad_analyzer": SileroVADAnalyzer()}
+    if _turn_strategies is not None:
+        # Only pass user_turn_strategies when we actually built one — passing
+        # None keeps the default (naive VAD endpointing).
+        _user_agg_kwargs["user_turn_strategies"] = _turn_strategies
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(),
-            # Optional learned end-of-turn classifier — discriminates real
-            # turn-ends from mid-thought pauses + echo bleed. Wired only
-            # when SMART_TURN=local.
-            turn_analyzer=_build_turn_analyzer(),
-        ),
+        user_params=LLMUserAggregatorParams(**_user_agg_kwargs),
     )
 
     pipeline = Pipeline([
