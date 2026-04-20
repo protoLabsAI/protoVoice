@@ -23,6 +23,10 @@ Task-oriented. Each page assumes you already know what you want to do — if you
 - [Delivery Policies](./delivery-policies) — `now` / `next_silence` / `when_asked` for async tool results
 - [Personas & Skills](./personas-and-skills) — swap voice + system prompt per skill YAML
 
+## Extending the agent
+
+- [Build a Tool](./build-tools) — sync vs async patterns, latency tiers, the result_callback gotcha
+
 ## Fleet integration
 
 - [A2A Integration](./a2a-integration) — inbound JSON-RPC + callback webhook + outbound dispatch

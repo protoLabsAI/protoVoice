@@ -1,8 +1,27 @@
 # Tools
 
-Every tool registered on the voice LLM. Sync tools block the LLM loop until they return; async tools return to the LLM immediately and deliver their result later via the [DeliveryController](/guides/delivery-policies).
+Every tool registered on the voice LLM. Adding new tools? See the **[Build a Tool](/guides/build-tools)** guide first — it covers the sync vs async patterns and the most expensive footgun (`result_callback` semantics for async tools).
+
+Sync tools block the LLM loop until they return; async tools return to the LLM immediately and pipecat injects the result as a developer message when ready.
 
 Source: [`agent/tools.py`](https://github.com/protoLabsAI/protoVoice/blob/main/agent/tools.py).
+
+## Patterns at a glance
+
+| | Sync (`cancel_on_interruption=True`) | Async (`cancel_on_interruption=False`) |
+|:---|:---|:---|
+| Foreground call | `await result_callback(real_result)` at the end of the handler | **Do NOT** call result_callback in the foreground |
+| Background work | None | `asyncio.create_task(...)` does the work, calls result_callback at the end |
+| User experience | Inline preamble → tool runs → answer streams | Inline preamble → tool kicks off → user keeps chatting → result lands later |
+| Latency tier | `FAST` or `MEDIUM` | `SLOW` |
+| Filler progress | Generated narration if `SLOW` | n/a (handler returns immediately) |
+| Interrupt cancels work | Yes | No |
+
+::: danger Async-tool gotcha
+For async tools, **never** call `result_callback` in the foreground with a placeholder ("I'll get back to you"). Pipecat treats it as the **finished** result — the LLM will think the tool returned that string as the actual answer and fabricate follow-ups about the topic.
+
+Spawn an asyncio task. Have the task call `result_callback` with the **real** result when it finishes. The user's "let me look into it" comes from the LLM's [inline preamble](/explanation/natural-fillers#the-pre-tool-preamble), not from the tool.
+:::
 
 ## Sync tools
 
