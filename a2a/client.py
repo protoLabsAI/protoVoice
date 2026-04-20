@@ -1,9 +1,12 @@
 """A2A outbound client — JSON-RPC 2.0 `message/send` dispatch.
 
-Synchronous (single HTTP request, waits for response). For truly long-
-running delegations we'll want push-notification callbacks — that's M6.
-For M4, the caller wraps us in an async tool so the voice pipeline keeps
-running during the call.
+Synchronous over the wire (single HTTP request, awaits response). The
+caller is expected to wrap us in an async context — pipecat tools spawn
+us inside a `cancel_on_interruption=False` handler so the voice pipeline
+stays responsive while we wait.
+
+`dispatch_message` takes raw url + headers. The DelegateRegistry in
+`agent/delegates.py` is the canonical caller.
 """
 
 from __future__ import annotations
@@ -12,8 +15,6 @@ import logging
 import uuid
 
 import httpx
-
-from .registry import AgentEntry
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +25,20 @@ class A2ADispatchError(RuntimeError):
 
 
 async def dispatch_message(
-    agent: AgentEntry,
-    user_text: str,
+    url: str,
     *,
+    headers: dict[str, str] | None = None,
+    user_text: str = "",
     context_id: str | None = None,
     timeout: float = 60.0,
 ) -> str:
-    """Send `user_text` to `agent` via A2A `message/send`, return the
-    assistant text from the first artifact's first text part.
+    """POST `message/send` to `url`, return the assistant text from the
+    first artifact's first text part.
 
     Raises A2ADispatchError on non-2xx, JSON-RPC error, or missing text.
     """
+    if not user_text:
+        raise A2ADispatchError("empty user_text")
     rpc_id = str(uuid.uuid4())
     context_id = context_id or str(uuid.uuid4())
     payload = {
@@ -49,25 +53,26 @@ async def dispatch_message(
             },
         },
     }
-    headers = {"Content-Type": "application/json"}
-    headers.update(agent.auth_headers())
+    req_headers = {"Content-Type": "application/json"}
+    if headers:
+        req_headers.update(headers)
 
-    logger.info(f"[a2a] dispatch → {agent.name} @ {agent.url}")
+    logger.info(f"[a2a] dispatch → {url}")
     async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(agent.url, json=payload, headers=headers)
+        resp = await client.post(url, json=payload, headers=req_headers)
 
     if resp.status_code != 200:
         raise A2ADispatchError(
-            f"{agent.name}: HTTP {resp.status_code} — {resp.text[:200]}"
+            f"HTTP {resp.status_code} from {url} — {resp.text[:200]}"
         )
 
     try:
         body = resp.json()
     except Exception as e:
-        raise A2ADispatchError(f"{agent.name}: non-JSON response ({e})") from e
+        raise A2ADispatchError(f"non-JSON response from {url} ({e})") from e
 
     if "error" in body:
-        raise A2ADispatchError(f"{agent.name}: {body['error']}")
+        raise A2ADispatchError(f"{body['error']}")
 
     result = body.get("result") or {}
     artifacts = result.get("artifacts") or []
@@ -76,4 +81,4 @@ async def dispatch_message(
             kind = part.get("kind") or part.get("type")
             if kind == "text" and part.get("text"):
                 return part["text"]
-    raise A2ADispatchError(f"{agent.name}: response had no text artifact")
+    raise A2ADispatchError(f"response from {url} had no text artifact")

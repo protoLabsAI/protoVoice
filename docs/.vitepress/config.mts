@@ -63,7 +63,7 @@ export default defineConfig({
             { text: "TTS Backends", link: "/reference/tts-backends" },
             { text: "Pipeline Shape", link: "/reference/pipeline-shape" },
             { text: "Tools", link: "/reference/tools" },
-            { text: "Agent Registry", link: "/reference/agent-registry" },
+            { text: "Delegates", link: "/reference/delegates" },
             { text: "Memory", link: "/reference/memory" },
             { text: "Metrics", link: "/reference/metrics" },
           ],

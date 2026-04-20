@@ -1,70 +1,63 @@
 # Two-Model Split
 
-protoVoice runs the in-pipeline LLM as a fast **router** and offloads heavy reasoning to a separate **thinker**. The router stays in the critical path of every turn; the thinker only fires when the router calls `deep_research`.
-
-There are **two ways to wire the thinker** — pick whichever fits your fleet.
+protoVoice runs the in-pipeline LLM as a fast **router** and offloads heavy reasoning to one or more **delegates**. The router stays in the critical path of every turn; delegates only fire when the router calls `delegate_to`.
 
 ## The split
 
 - **Router** — the local OpenAI-compatible LLM at `LLM_URL` (typically a small fast model: Qwen3.5-4B / 9B, GPT-4o-mini, Llama 3 8B). Handles every user turn: chitchat, tool selection, the inline preamble before tool calls, and speaking the final answer.
-- **Thinker** — a more capable model OR another agent. Invoked only when the router decides it needs help (calls the `deep_research` tool).
+- **Delegates** — a list of heavier "second-tier" backends: other agents in the protoLabs fleet (via A2A) and/or larger LLMs on remote endpoints. Configured in `config/delegates.yaml`. Invoked only when the router decides a question warrants the hand-off.
 
 This pattern matters because:
 
 - **TTFA**. The router is in the critical path of every turn; latency is felt directly. Tiny models do 150-300 tok/s locally; big models do 30-50. Don't put a big model in the router slot.
-- **Cost**. Routing chitchat to a tiny local model burns zero API tokens. Only research questions hit the thinker.
-- **Latency isolation**. The thinker can take 2-30 s without blocking the conversation, because it runs behind a tool call that the user hears acknowledged immediately via the [inline preamble](/explanation/natural-fillers).
+- **Cost**. Routing chitchat to a tiny local model burns zero API tokens. Only research questions hit a delegate.
+- **Latency isolation**. A delegate can take 2-30 s without blocking the conversation, because it runs behind a tool call that the user hears acknowledged immediately via the [inline preamble](/explanation/natural-fillers).
 
-## Two thinker mechanisms
+## Delegate types
 
-### Option 1 — direct LLM endpoint (`THINKER_URL`)
+`config/delegates.yaml` accepts two kinds:
 
-Point at any OpenAI-compatible chat-completions endpoint:
-
-```bash
-THINKER_URL=http://gateway:4000/v1
-THINKER_MODEL=claude-opus-4-6
-THINKER_API_KEY=$LITELLM_MASTER_KEY
-```
-
-`deep_research(query="...")` POSTs the query as a one-shot user message to that endpoint and speaks the response. No agent context, no tools — just "raw model with a research-flavored system prompt."
-
-**Best when**: you have a LiteLLM gateway / cloud API and just want a bigger model behind one tool. Smallest moving part.
-
-**Tunables**:
-
-```bash
-THINKER_MAX_TOKENS=400
-THINKER_TEMPERATURE=0.4
-THINKER_SYSTEM_PROMPT="You are a research assistant. Answer thoroughly but concisely (2-4 sentences). Plain text only — no markdown."
-```
-
-### Option 2 — A2A dispatch to another agent (ava)
-
-Point at an A2A-speaking agent in `config/agents.yaml`:
+### `type: a2a` — another agent in the fleet
 
 ```yaml
-agents:
-  - name: ava
-    url: ${AVA_URL:-http://ava:3008/a2a}
-    auth:
-      scheme: apiKey
-      credentialsEnv: AVA_API_KEY
+- name: ava
+  description: "Chief of staff — sitreps, planning, fleet delegation."
+  type: a2a
+  url: ${AVA_URL:-http://ava:3008/a2a}
+  auth: { scheme: apiKey, credentialsEnv: AVA_API_KEY }
 ```
 
-`deep_research(query="...")` does an A2A `message/send` to ava. Ava is a full agent with her own tools, memory, subagents, and dispatch authority. The answer comes back as an artifact and the router speaks it.
+A2A delegates are full agents with their own tools, memory, and subagents. Strongest answers; one extra hop per call.
 
-**Best when**: you have an orchestrator agent in the protoLabs fleet that's already wired up with the right knowledge / sub-agents / context. Strongest answers; one extra hop.
+### `type: openai` — direct LLM endpoint
 
-### Resolution priority
+```yaml
+- name: opus
+  description: "Heavy reasoning model — analysis, summarization, depth."
+  type: openai
+  url: http://gateway:4000/v1
+  model: claude-opus-4-6
+  api_key_env: LITELLM_MASTER_KEY
+```
 
-When the user calls `deep_research`:
+OpenAI-compat delegates are one-shot chat completions to any LiteLLM / cloud / self-hosted endpoint. Smaller moving part; just "raw model with a research-flavored system prompt." Best for pure depth-not-tools questions.
 
-1. If `THINKER_URL` and `THINKER_MODEL` are set, use the direct endpoint.
-2. Else if `ava` is in the registry, dispatch via A2A.
-3. Else, return a synthetic placeholder (so dev without a fleet running doesn't see errors).
+You can mix as many of each as you want. The router LLM picks the right one per question based on each delegate's `description`.
 
-You can configure both — the thinker takes priority. Use this if you want a fast cloud model for most lookups and ava as a fallback.
+## How target selection works
+
+`delegate_to`'s schema is built dynamically at session start. The `target` field is `enum`-restricted to known delegate names; the tool description enumerates each delegate's `description`. The LLM picks based on those descriptions.
+
+So for a fleet with both `ava` and `opus` configured, the LLM sees something like:
+
+```
+delegate_to: Hand off a question to a specialized backend...
+Available targets:
+  - ava: Chief of staff for the protoLabs fleet — sitreps, planning...
+  - opus: Heavy reasoning model — analysis, summarization, depth...
+```
+
+User asks "what's the status of the dashboard project?" → router picks `ava`. User asks "summarize the differences between two architectures I'll describe" → router picks `opus`. The split is implicit in the descriptions.
 
 ## Why not just one model
 
@@ -75,14 +68,15 @@ If gateway latency drops below ~300 ms TTFB and local inference becomes free, th
 ## Health check
 
 ```bash
-curl http://localhost:7867/healthz | jq .thinker
-# {"configured": true, "model": "claude-opus-4-6"}
-# or
-# {"configured": false, "model": null}
+curl http://localhost:7867/healthz | jq .delegates
+# [
+#   {"name": "ava",  "type": "a2a"},
+#   {"name": "opus", "type": "openai"}
+# ]
 ```
 
 ## Code references
 
-- `agent/tools.py::_deep_research_handler` — the priority-ordered routing
-- `app.py::_thinker_or_none` + `_thinker_call` — the direct-endpoint client
-- `a2a/registry.py::AgentRegistry` — the A2A path
+- `agent/delegates.py` — `Delegate` dataclass, `DelegateRegistry`, `dispatch()` (branches on type)
+- `agent/tools.py::_delegate_to_handler` — the tool binding
+- `a2a/client.py::dispatch_message` — A2A wire-protocol implementation

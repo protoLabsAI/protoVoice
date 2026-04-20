@@ -51,23 +51,17 @@ DuckDuckGo via the `ddgs` package. Returns up to 5 snippets concatenated into a 
 { "query": "history of hot dogs" }
 ```
 
-### `deep_research`
+### `delegate_to`
 
-Routes through the orchestrator (ava) via A2A when an ava entry is present in `config/agents.yaml` AND `AVA_API_KEY` is set. Otherwise falls back to a synthetic placeholder — useful for developing without the fleet running.
-
-```json
-{ "query": "what's the current status of the ingestion pipeline?" }
-```
-
-### `a2a_dispatch`
-
-Send a free-form message to any agent in the registry. Use when the LLM knows the target agent specifically; use `deep_research` when it doesn't care which agent handles the research.
+Single hand-off tool covering both A2A agents and OpenAI-compat LLM endpoints. The LLM picks a target by name from the `enum`-restricted choices in the schema, which are populated dynamically from `config/delegates.yaml` at session start.
 
 ```json
-{ "agent": "ava", "message": "give me a sitrep on the dashboard project" }
+{ "target": "ava", "query": "give me a sitrep on the dashboard project" }
 ```
 
-The registry's schema follows [protoWorkstacean's agents.yaml](https://github.com/protoLabsAI/protoWorkstacean/blob/main/workspace/agents.yaml.example). Config-loaded on startup via `AGENTS_YAML` (default `config/agents.yaml`).
+Each delegate's `description` is baked into the tool's schema description — that's how the LLM knows which target fits which question. See [Delegates](./delegates) for full details + adding new targets.
+
+`delegate_to` is **only registered** when `config/delegates.yaml` has at least one entry. Empty file → no tool, no chance the LLM tries to call something that doesn't exist.
 
 ## Async tools
 
@@ -81,27 +75,14 @@ Long-running investigation. LLM acknowledges immediately ("Sure — I'll look in
 
 Keywords for `when_asked` matching are derived from words in the query longer than 3 chars.
 
-## Registry shape
+## How tool selection actually works
 
-```yaml
-# config/agents.yaml
-agents:
-  - name: ava
-    url: ${AVA_URL:-http://ava-host:3008/a2a}   # POSIX env expansion supported
-    auth:
-      scheme: apiKey
-      credentialsEnv: AVA_API_KEY
-    skills: [...]
-```
+The LLM picks tools entirely from the **schemas** — not from prompt re-statements. Each tool's `description` is the source of truth.
 
-Supported auth schemes: `apiKey` (`X-API-Key` header) and `bearer` (`Authorization: Bearer`). Missing env vars log a warning; entries with missing creds are still loaded but unauthenticated.
+This is why persona prompts (SOUL.md, skill YAMLs) **should not hardcode tool names**. If your `web_search` tool gets renamed, every prompt that mentions it goes stale. Instead, write personas that describe behavior:
 
-## Tool selection prompt
+> "When a question needs current information, reach for the tools available rather than guessing."
 
-The LLM's system prompt instructs it to:
+The LLM sees the actual tool list (with descriptions) every turn via the OpenAI function-calling contract. That's enough — strong models pick correctly without prompt repetition. If you find a model under-using tools, tighten the tool's own description first; only fall back to prompt-level reinforcement if that doesn't work.
 
-- Answer directly without a tool when it can
-- Prefer `deep_research` for quick fact lookups
-- Prefer `slow_research` when the user doesn't need an immediate answer
-
-Ultimately the small router LLM (current or future) is the tie-breaker. If it over-dispatches, tighten the prompt.
+For the dynamic delegate enumeration (`delegate_to`'s `target` enum), that's built at session start from `config/delegates.yaml` — see [Delegates](./delegates).

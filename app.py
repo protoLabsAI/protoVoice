@@ -56,9 +56,9 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
-from a2a.registry import AgentRegistry
 from a2a.server import register_a2a_routes
 from agent.backchannel import BackchannelController
+from agent.delegates import DelegateRegistry
 from agent.echo_guard import (
     ECHO_GUARD_MS,
     HALF_DUPLEX,
@@ -114,9 +114,10 @@ _FILLER_GEN = FillerGenerator(
     settings=_FILLER,
 )
 
-# Agent registry — loaded once at boot, shared across all sessions.
-_AGENTS_YAML = Path(os.environ.get("AGENTS_YAML", "config/agents.yaml"))
-_AGENT_REGISTRY = AgentRegistry(_AGENTS_YAML)
+# Delegate registry — A2A agents + OpenAI-compat endpoints the agent can
+# hand off to via `delegate_to`. Loaded once at boot.
+_DELEGATES_YAML = Path(os.environ.get("DELEGATES_YAML", "config/delegates.yaml"))
+_DELEGATES = DelegateRegistry(_DELEGATES_YAML)
 
 # Tracks the most-recently-connected session's DeliveryController so the
 # A2A callback route can speak push-notified results when a session is
@@ -173,59 +174,6 @@ def _build_turn_analyzer():
 # Echo-guard state — shared across observer and suppressor for THIS session.
 # Module-level since pipeline is single-tenant for now.
 _ECHO_STATE = EchoGuardState()
-
-
-# ---------------------------------------------------------------------------
-# Thinker — direct LLM endpoint for deep_research (the heavier model in
-# the two-model split). Optional; if unset, deep_research falls through
-# to A2A→ava, then to a synthetic placeholder.
-# ---------------------------------------------------------------------------
-
-THINKER_URL = os.environ.get("THINKER_URL", "")
-THINKER_MODEL = os.environ.get("THINKER_MODEL", "")
-THINKER_API_KEY = os.environ.get("THINKER_API_KEY", "not-needed")
-THINKER_MAX_TOKENS = int(os.environ.get("THINKER_MAX_TOKENS", "400"))
-THINKER_TEMPERATURE = float(os.environ.get("THINKER_TEMPERATURE", "0.4"))
-THINKER_SYSTEM_PROMPT = os.environ.get(
-    "THINKER_SYSTEM_PROMPT",
-    "You are a research assistant. Answer the user's question thoroughly "
-    "but concisely (2-4 sentences). Plain text only — no markdown, no "
-    "lists. The answer will be spoken aloud verbatim.",
-)
-
-_thinker_client = None
-
-
-def _get_thinker_client():
-    global _thinker_client
-    if _thinker_client is None:
-        from openai import AsyncOpenAI
-        _thinker_client = AsyncOpenAI(api_key=THINKER_API_KEY, base_url=THINKER_URL)
-    return _thinker_client
-
-
-async def _thinker_call(query: str) -> str:
-    """One-shot non-streaming call to THINKER_URL. Returns plain answer text."""
-    r = await _get_thinker_client().chat.completions.create(
-        model=THINKER_MODEL,
-        messages=[
-            {"role": "system", "content": THINKER_SYSTEM_PROMPT},
-            {"role": "user", "content": query},
-        ],
-        max_tokens=THINKER_MAX_TOKENS,
-        temperature=THINKER_TEMPERATURE,
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-    )
-    return (r.choices[0].message.content or "").strip()
-
-
-def _thinker_or_none():
-    """Returns the thinker callable if THINKER_URL+THINKER_MODEL are set,
-    else None — letting deep_research fall back to A2A→ava."""
-    if THINKER_URL and THINKER_MODEL:
-        logger.info(f"Thinker: {THINKER_URL} model={THINKER_MODEL}")
-        return _thinker_call
-    return None
 
 # Simple in-process counters for /api/metrics. Reset on process restart.
 _METRICS: dict = {
@@ -390,8 +338,7 @@ async def run_bot(webrtc_connection) -> None:
         llm,
         on_finish=_cancel_progress,
         delivery=delivery,
-        registry=_AGENT_REGISTRY,
-        thinker=_thinker_or_none(),
+        delegates=_DELEGATES,
     )
 
     # Per-skill tool restriction. If skill.tools is non-empty, scope the
@@ -630,13 +577,11 @@ async def health():
         "stt_backend": STT_BACKEND,
         "tts_backend": TTS_BACKEND,
         "verbosity": _FILLER.verbosity.value,
-        "known_agents": _AGENT_REGISTRY.names(),
+        "delegates": [
+            {"name": d.name, "type": d.type} for d in _DELEGATES.all()
+        ],
         "skill": _ACTIVE_SKILL_SLUG,
         "skills": list(_SKILLS.keys()),
-        "thinker": {
-            "configured": bool(THINKER_URL and THINKER_MODEL),
-            "model": THINKER_MODEL or None,
-        },
         "audio": {
             "half_duplex": HALF_DUPLEX,
             "echo_guard_ms": ECHO_GUARD_MS,

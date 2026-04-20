@@ -12,7 +12,7 @@ All values have sensible defaults. Set via shell, `docker compose` environment, 
 | `SYSTEM_PROMPT` | *(built-in)* | Overrides the default voice-assistant system prompt |
 | `VERBOSITY` | `brief` | Default filler verbosity: `silent` / `brief` / `narrated` / `chatty` |
 | `TZ` | `America/New_York` | Timezone for the `get_datetime` tool |
-| `AGENTS_YAML` | `config/agents.yaml` | Path to the outbound A2A registry |
+| `DELEGATES_YAML` | `config/delegates.yaml` | Path to the delegate registry (A2A + OpenAI) |
 
 ## LLM
 
@@ -26,19 +26,6 @@ All values have sensible defaults. Set via shell, `docker compose` environment, 
 | `LLM_API_KEY` | `not-needed` | Bearer for `LLM_URL` |
 | `LLM_MAX_TOKENS` | `150` | Cap per response |
 | `LLM_TEMPERATURE` | `0.7` | Sampling temperature |
-
-## Thinker (the heavier model behind `deep_research`)
-
-Optional. When unset, `deep_research` falls through to A2A→ava if configured, else a synthetic placeholder. See [Two-Model Split](/explanation/two-model-split).
-
-| Variable | Default | Purpose |
-|:---|:---|:---|
-| `THINKER_URL` | *(unset)* | OpenAI-compat base URL for the thinker model |
-| `THINKER_MODEL` | *(unset)* | Model name at that URL |
-| `THINKER_API_KEY` | `not-needed` | Bearer for the endpoint |
-| `THINKER_MAX_TOKENS` | `400` | Cap per thinker response |
-| `THINKER_TEMPERATURE` | `0.4` | Sampling temperature for the thinker |
-| `THINKER_SYSTEM_PROMPT` | *(built-in research-assistant prompt)* | Override to tune tone/length |
 
 ## STT
 
@@ -96,15 +83,16 @@ Optional. When unset, `deep_research` falls through to A2A→ava if configured, 
 |:---|:---|:---|
 | `CONFIG_DIR` | `config` | Where SOUL.md + skills/ + agents.yaml live |
 
-## A2A authentication
+## Delegate authentication
 
-Referenced from `config/agents.yaml` via `credentialsEnv`. Common values:
+Referenced from `config/delegates.yaml` via `credentialsEnv` (a2a) or `api_key_env` (openai). Common values:
 
 | Variable | Purpose |
 |:---|:---|
-| `AVA_API_KEY` | Ava orchestrator auth |
-| `AVA_URL` | Override ava's URL without editing YAML (used via `${AVA_URL:-...}` expansion) |
-| `QUINN_API_KEY` | (If quinn is added to the registry) |
+| `AVA_API_KEY` | Ava orchestrator auth (when `type: a2a`) |
+| `AVA_URL` | Override ava's URL without editing YAML (`${AVA_URL:-...}` expansion) |
+| `LITELLM_MASTER_KEY` | Bearer for a LiteLLM-fronted openai delegate |
+| `OPENAI_API_KEY` | If a delegate points directly at OpenAI |
 
 Add more as you extend the registry.
 

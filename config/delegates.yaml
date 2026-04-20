@@ -1,0 +1,44 @@
+# Delegate registry — consumed by agent/delegates.py.
+#
+# The agent's `delegate_to(target, query)` tool picks one of these by
+# name. Each delegate has a `description` the LLM uses to decide which
+# target fits a question.
+#
+# Two `type`s supported:
+#   a2a    — JSON-RPC `message/send` to another agent in the protoLabs fleet
+#   openai — chat-completions to any OpenAI-compatible /v1 endpoint
+#
+# Add as many as you want. Empty list = `delegate_to` is not registered.
+
+delegates:
+  # ─── A2A: ava (chief of staff / orchestrator) ──────────────────────
+  - name: ava
+    description: >-
+      Chief of staff for the protoLabs fleet. Best for project status
+      reports, coordination across other agents, planning a feature,
+      bug triage, and anything where the right answer requires looking
+      at several systems (board, CI, incidents). Has her own tools and
+      delegation authority.
+    type: a2a
+    url: ${AVA_URL:-http://ava:3008/a2a}
+    auth:
+      scheme: apiKey
+      credentialsEnv: AVA_API_KEY
+
+  # ─── OpenAI-compatible: heavy reasoning model via gateway ──────────
+  # Uncomment when the gateway is wired. Example shape:
+  #
+  # - name: opus
+  #   description: >-
+  #     Heavy reasoning model. Use when the user wants analysis,
+  #     summarization, or a thorough explanation of a topic — anything
+  #     that needs depth more than current facts.
+  #   type: openai
+  #   url: http://gateway:4000/v1
+  #   model: claude-opus-4-6
+  #   api_key_env: LITELLM_MASTER_KEY
+  #   max_tokens: 400
+  #   temperature: 0.4
+  #   system_prompt: >-
+  #     You are a research assistant. Answer thoroughly but concisely
+  #     (2-4 sentences). Plain text only — no markdown.

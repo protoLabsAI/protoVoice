@@ -5,13 +5,14 @@ Currently registered:
   calculator     — safe AST eval of arithmetic expressions (sync)
   get_datetime   — current date/time in a configurable timezone (sync)
   web_search     — DuckDuckGo via `ddgs`, top-5 snippets (sync)
-  deep_research  — quick lookup; delegates to ava via A2A when configured,
-                   otherwise a synthetic placeholder (sync)
-  a2a_dispatch   — send a message to another protoLabs agent (sync)
+  delegate_to    — single dispatch tool covering A2A agents AND OpenAI-
+                   compat endpoints. Targets are configured in
+                   config/delegates.yaml. Replaces the old deep_research
+                   and a2a_dispatch tools.
   slow_research  — long-running investigation, async delivery (M3)
 
-Sync tools block the LLM loop until they return — filler + progress fires
-via the on_function_calls_started hook in app.py. Async tools
+Sync tools block the LLM loop until they return — filler + progress
+fires via the on_function_calls_started hook in app.py. Async tools
 (`cancel_on_interruption=False`) return control immediately and deliver
 via the DeliveryController.
 """
@@ -26,48 +27,40 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import httpx
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams, LLMService
 
-import httpx
-
-from a2a.client import A2ADispatchError, dispatch_message
-from a2a.registry import AgentRegistry
-
+from .delegates import DelegateError, DelegateRegistry, dispatch as delegate_dispatch
 from .delivery import DeliveryController
 from .filler import Latency
 
 logger = logging.getLogger(__name__)
 
+# Tunables — let us stress-test filler + progress + delivery independently.
+SLOW_RESEARCH_SECS = float(os.environ.get("SLOW_RESEARCH_SECS", "20"))
+DEFAULT_TZ = os.environ.get("TZ", "America/New_York")
+
 # Tool names registered with cancel_on_interruption=False — async path.
-# app.py reads this to suppress the progress-filler loop, which otherwise
-# leaks forever because the on_finish hook only fires on sync tools.
 ASYNC_TOOL_NAMES: frozenset[str] = frozenset({"slow_research"})
 
-# Expected-latency hint per tool. Drives whether opening-filler and
-# progress-filler fire at all (see agent/filler.py::Latency).
+# Expected-latency hint per tool.
 TOOL_LATENCY: dict[str, Latency] = {
-    "calculator":     Latency.FAST,    # pure Python, instant
-    "get_datetime":   Latency.FAST,    # timezone lookup, instant
-    "web_search":     Latency.MEDIUM,  # DDGS typically 1-3s
-    "deep_research":  Latency.MEDIUM,  # ava A2A or 4s synthetic
-    "a2a_dispatch":   Latency.MEDIUM,  # varies by target; MEDIUM is a safe default
-    "slow_research":  Latency.SLOW,    # 20s+ by design
+    "calculator":     Latency.FAST,
+    "get_datetime":   Latency.FAST,
+    "web_search":     Latency.MEDIUM,
+    "delegate_to":    Latency.MEDIUM,
+    "slow_research":  Latency.SLOW,
 }
 
 
 def latency_for(tool_name: str) -> Latency:
     return TOOL_LATENCY.get(tool_name, Latency.MEDIUM)
 
-# Tunables — let us stress-test filler + progress + delivery independently.
-FAKE_RESEARCH_SECS = float(os.environ.get("FAKE_RESEARCH_SECS", "4"))
-SLOW_RESEARCH_SECS = float(os.environ.get("SLOW_RESEARCH_SECS", "20"))
-DEFAULT_TZ = os.environ.get("TZ", "America/New_York")
-
 
 # ---------------------------------------------------------------------------
-# Schemas
+# Schemas — sync tools have static schemas; delegate_to is built per-registry
 # ---------------------------------------------------------------------------
 
 CALCULATOR_SCHEMA = FunctionSchema(
@@ -105,52 +98,50 @@ WEB_SEARCH_SCHEMA = FunctionSchema(
     required=["query"],
 )
 
-DEEP_RESEARCH_SCHEMA = FunctionSchema(
-    name="deep_research",
-    description=(
-        "Answer a question that requires research — looks it up through "
-        "the orchestrator agent (which has its own tools and subagents). "
-        "Returns quickly; speak the result as a normal answer."
-    ),
-    properties={
-        "query": {"type": "string", "description": "The question or topic"},
-    },
-    required=["query"],
-)
-
-A2A_DISPATCH_SCHEMA = FunctionSchema(
-    name="a2a_dispatch",
-    description=(
-        "Send a message to another agent in the protoLabs fleet and return "
-        "their response. Use when a specific agent would be better suited "
-        "than general research."
-    ),
-    properties={
-        "agent": {
-            "type": "string",
-            "description": "Target agent name (e.g. 'ava')",
-        },
-        "message": {
-            "type": "string",
-            "description": "The message to send — phrase it as you would speak to the agent.",
-        },
-    },
-    required=["agent", "message"],
-)
-
 SLOW_RESEARCH_SCHEMA = FunctionSchema(
     name="slow_research",
     description=(
         "Kick off a long-running investigation (30s+). Use when the user "
         "doesn't need an immediate answer — they can keep chatting while "
-        "the answer is prepared, and the agent will speak the result when "
-        "it's ready."
+        "the agent will speak the result when it's ready."
     ),
     properties={
         "query": {"type": "string", "description": "The question to investigate"},
     },
     required=["query"],
 )
+
+
+def _delegate_to_schema(registry: DelegateRegistry) -> FunctionSchema:
+    """Built dynamically — `target` is enum-restricted to known delegates,
+    and the description enumerates what each delegate is good for so the
+    LLM can pick correctly."""
+    items = registry.all()
+    target_lines = "\n".join(f"  - {d.name}: {d.description}" for d in items)
+    return FunctionSchema(
+        name="delegate_to",
+        description=(
+            "Hand off a question to a specialized backend — another agent "
+            "in the fleet, or a heavier reasoning model. Use when the "
+            "user's question genuinely requires depth, current info, or "
+            "another specialist's expertise.\n\n"
+            f"Available targets:\n{target_lines}\n\n"
+            "Pass `target` (one of the names above) and `query` (the "
+            "question, phrased as you'd ask a person)."
+        ),
+        properties={
+            "target": {
+                "type": "string",
+                "enum": [d.name for d in items],
+                "description": "Which delegate to ask",
+            },
+            "query": {
+                "type": "string",
+                "description": "The question to ask",
+            },
+        },
+        required=["target", "query"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -233,108 +224,31 @@ async def web_search_handler(params: FunctionCallParams) -> None:
     await params.result_callback(text[:2000])  # keep context manageable
 
 
-def _deep_research_handler(registry: AgentRegistry, thinker=None):
-    """Deep research routing, in priority order:
-
-      1. `thinker` callable (THINKER_URL — direct LLM endpoint, e.g. a
-         bigger gateway model). Cheapest path when configured.
-      2. `ava` via A2A — full agent with its own tools and memory.
-         Strongest answers but costs an extra hop + session.
-      3. Synthetic placeholder — for dev without either configured.
-
-    The two-model-split design: the in-pipeline LLM (router) handles
-    chitchat and quick tool calls; deep_research delegates the heavy
-    thinking to a more capable model OR to a specialist agent. Both
-    target the same tool name — operators wire whichever fits.
-    """
-
+def _delegate_to_handler(registry: DelegateRegistry):
     async def _handler(params: FunctionCallParams) -> None:
-        query = params.arguments.get("query", "").strip()
-
-        if thinker is not None:
-            try:
-                logger.info(f"[deep_research] thinker call: {query!r}")
-                result = await thinker(query)
-                await params.result_callback(result)
-                return
-            except (httpx.ConnectError, httpx.ConnectTimeout, OSError) as e:
-                logger.warning(
-                    f"[deep_research] thinker unreachable "
-                    f"({type(e).__name__}: {e}); trying ava A2A next"
-                )
-            except Exception as e:
-                logger.exception(f"[deep_research] thinker error: {e}")
-                await params.result_callback(
-                    f"My research model errored out: {e}"
-                )
-                return
-
-        ava = registry.get("ava")
-        if ava:
-            try:
-                logger.info(f"[deep_research] delegating to ava: {query!r}")
-                result = await dispatch_message(ava, query)
-                await params.result_callback(result)
-                return
-            except (httpx.ConnectError, httpx.ConnectTimeout, OSError) as e:
-                logger.warning(
-                    f"[deep_research] ava unreachable ({type(e).__name__}: {e}); "
-                    "degrading to synthetic"
-                )
-            except A2ADispatchError as e:
-                logger.warning(f"[deep_research] ava dispatch error: {e}")
-                await params.result_callback(
-                    f"I tried to ask our orchestrator but got an error: {e}"
-                )
-                return
-            except Exception as e:
-                logger.exception(f"[deep_research] unexpected error: {e}")
-                await params.result_callback(
-                    f"Something went wrong asking our orchestrator: {e}"
-                )
-                return
-
-        # Synthetic fallback — neither thinker nor ava configured.
-        logger.info(f"[deep_research] synthetic fallback: {query!r}")
-        await asyncio.sleep(FAKE_RESEARCH_SECS)
-        await params.result_callback(
-            f"No thinker or orchestrator is configured, so here's a "
-            f"placeholder answer about '{query}'. Set THINKER_URL or "
-            f"AVA_URL + AVA_API_KEY for real research."
-        )
-
-    return _handler
-
-
-def _a2a_dispatch_handler(registry: AgentRegistry):
-    async def _handler(params: FunctionCallParams) -> None:
-        name = (params.arguments.get("agent") or "").strip().lower()
-        message = (params.arguments.get("message") or "").strip()
-        if not name or not message:
+        target = (params.arguments.get("target") or "").strip()
+        query = (params.arguments.get("query") or "").strip()
+        if not target or not query:
             await params.result_callback(
-                "I need both an agent name and a message to dispatch."
+                "I need both a target and a question to delegate."
             )
             return
-        agent = registry.get(name)
-        if not agent:
+        delegate = registry.get(target)
+        if not delegate:
             available = ", ".join(registry.names()) or "(none)"
             await params.result_callback(
-                f"I don't know an agent named '{name}'. Available: {available}."
+                f"I don't know a delegate named '{target}'. Available: {available}."
             )
             return
+        logger.info(f"[delegate_to] target={target} type={delegate.type} query={query!r}")
         try:
-            result = await dispatch_message(agent, message)
+            result = await delegate_dispatch(delegate, query)
             await params.result_callback(result)
-        except (httpx.ConnectError, httpx.ConnectTimeout, OSError) as e:
-            await params.result_callback(
-                f"I couldn't reach {name} ({type(e).__name__}). "
-                "The agent might be offline or the URL is wrong."
-            )
-        except A2ADispatchError as e:
-            await params.result_callback(f"Dispatch to {name} failed: {e}")
+        except DelegateError as e:
+            await params.result_callback(f"Couldn't reach {target}: {e}")
         except Exception as e:
-            logger.exception(f"[a2a_dispatch] unexpected error: {e}")
-            await params.result_callback(f"Dispatch to {name} errored: {e}")
+            logger.exception(f"[delegate_to] unexpected error: {e}")
+            await params.result_callback(f"Delegation to {target} errored: {e}")
 
     return _handler
 
@@ -345,15 +259,9 @@ def _a2a_dispatch_handler(registry: AgentRegistry):
 
 def _slow_research_handler(_controller: DeliveryController):
     """Async tool — the LLM acknowledges via its inline preamble (M10
-    TOOL USE prompt block), pipecat marks the call in-progress, the
-    background task does the work, and result_callback() at the end is
-    what tells the LLM the actual result. Pipecat then injects it as a
-    developer message and the LLM speaks the real answer.
-
-    DO NOT call result_callback in the foreground — pipecat treats it as
-    the finished result and the LLM thinks the tool returned that
-    string, so it'll happily chat about the topic with no real data.
-    """
+    TOOL USE prompt block). DO NOT call result_callback in the foreground;
+    pipecat would treat that as the finished result and the LLM would
+    fabricate follow-ups about the topic."""
     async def _handler(params: FunctionCallParams) -> None:
         query = params.arguments.get("query", "")
         logger.info(f"[slow_research] starting: {query!r} (sleep {SLOW_RESEARCH_SECS}s)")
@@ -385,17 +293,14 @@ def register_tools(
     *,
     on_finish=None,
     delivery: DeliveryController | None = None,
-    registry: AgentRegistry | None = None,
-    thinker=None,
+    delegates: DelegateRegistry | None = None,
 ) -> ToolsSchema:
     """Attach handlers + return the schema for the LLMContext.
 
-    `thinker` (optional async callable) — receives the deep_research
-    query and returns the answer text. Wired by app.py from THINKER_URL
-    when set. Takes priority over A2A→ava when both are configured.
+    `delegates` — when non-empty, registers `delegate_to` with a schema
+    that enumerates the available targets. When empty/None, the tool is
+    NOT registered (the LLM doesn't see it, so it can't try to call it).
     """
-
-    registry = registry or AgentRegistry()  # empty is fine
 
     def _wrap_sync(handler):
         async def _wrapped(params: FunctionCallParams) -> None:
@@ -413,24 +318,16 @@ def register_tools(
     llm.register_function("calculator", _wrap_sync(calculator_handler), cancel_on_interruption=True)
     llm.register_function("get_datetime", _wrap_sync(datetime_handler), cancel_on_interruption=True)
     llm.register_function("web_search", _wrap_sync(web_search_handler), cancel_on_interruption=True)
-    llm.register_function(
-        "deep_research",
-        _wrap_sync(_deep_research_handler(registry, thinker=thinker)),
-        cancel_on_interruption=True,
-    )
-    llm.register_function(
-        "a2a_dispatch",
-        _wrap_sync(_a2a_dispatch_handler(registry)),
-        cancel_on_interruption=True,
-    )
 
-    standard = [
-        CALCULATOR_SCHEMA,
-        DATETIME_SCHEMA,
-        WEB_SEARCH_SCHEMA,
-        DEEP_RESEARCH_SCHEMA,
-        A2A_DISPATCH_SCHEMA,
-    ]
+    standard = [CALCULATOR_SCHEMA, DATETIME_SCHEMA, WEB_SEARCH_SCHEMA]
+
+    if delegates and delegates.names():
+        llm.register_function(
+            "delegate_to",
+            _wrap_sync(_delegate_to_handler(delegates)),
+            cancel_on_interruption=True,
+        )
+        standard.append(_delegate_to_schema(delegates))
 
     if delivery is not None:
         llm.register_function(

@@ -87,9 +87,9 @@ Reuse the same `contextId` across turns. protoVoice keeps a bounded buffer (`A2A
 
 ## Outbound — we call another agent
 
-See [Tools → a2a_dispatch](/reference/tools#a2a_dispatch) and the [Agent Registry reference](/reference/agent-registry).
+See [Tools → delegate_to](/reference/tools#delegate_to) and the [Delegates reference](/reference/delegates).
 
-Voice tools `deep_research` and `a2a_dispatch` pull from `config/agents.yaml`. When `AVA_API_KEY` and `AVA_URL` are set, `deep_research` delegates to ava automatically; otherwise it falls back to a synthetic placeholder so the session keeps flowing.
+Outbound A2A is one branch of the unified `delegate_to(target, query)` tool. Targets are configured in `config/delegates.yaml`; each entry sets `type: a2a` and provides a URL + auth. The LLM picks the target by name based on the description.
 
 ## The callback endpoint
 

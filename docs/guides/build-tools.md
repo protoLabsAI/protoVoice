@@ -154,23 +154,28 @@ Each tool registers a tier that gates filler behavior:
 
 See `agent/tools.TOOL_LATENCY` for the registration table.
 
-## A2A dispatch as a tool
+## Hand-off as a delegate (not a tool)
 
-If your "tool" is actually delegating to another agent in the fleet (e.g., asking the orchestrator), use `a2a_dispatch` instead of writing a new tool. It's already registered:
+If your "tool" is actually delegating a question to another agent OR a heavier model, **don't write a new tool** — add it to `config/delegates.yaml`. The agent already has `delegate_to(target, query)` which handles both A2A agents and OpenAI-compat endpoints. You get the right behaviour for free, and the LLM picks based on the delegate's description (no prompt engineering required).
 
+```yaml
+delegates:
+  - name: my_specialist
+    description: "What this delegate is good at."
+    type: a2a            # or openai
+    url: ...
 ```
-{"agent": "ava", "message": "give me a sitrep"}
-```
 
-See [Agent Registry](/reference/agent-registry) and [A2A Integration](./a2a-integration).
+See [Delegates](/reference/delegates) for the full schema. Add a new specialist agent or a new heavier model — same tool, same code path.
 
 ## Conventions
 
 - **Handler is `async def`** — even sync tools (the LLM call is async-only).
 - **Handler signature is `(params: FunctionCallParams) -> None`** — return value ignored; speak via `result_callback`.
 - **Sync handlers MUST be wrapped with `_wrap_sync()`** in `register_tools()` — that wrapper handles the `on_finish` hook (cancels the SLOW progress loop). Async handlers do NOT use the wrapper because their work continues after the function returns.
-- **Catch your own connection errors** — see how `deep_research` and `a2a_dispatch` catch `httpx.ConnectError` to surface a friendly spoken message rather than crash the turn (see [`agent/tools.py`](https://github.com/protoLabsAI/protoVoice/blob/main/agent/tools.py)).
+- **Catch your own connection errors** — see how `delegate_to` catches `httpx.ConnectError` to surface a friendly spoken message rather than crash the turn (see [`agent/tools.py`](https://github.com/protoLabsAI/protoVoice/blob/main/agent/tools.py)).
 - **Tool args feed the inline preamble**. The TOOL USE prompt instructs the LLM to ground its preamble in the topic, so naming args clearly (`query`, `city`, `topic`) helps natural acknowledgement.
+- **Don't mention tool names in persona prompts.** The LLM picks tools from the schemas, not from prompt re-statements. A persona that says "use `web_search` for X" goes stale the moment you rename or remove that tool. Write personas that describe behavior — the schemas tell the LLM what's available.
 
 ## Common pitfalls
 
