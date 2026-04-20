@@ -322,7 +322,10 @@ async def run_bot(webrtc_connection) -> None:
 
     async def _generate_and_queue(coro_factory, tag: str) -> None:
         """Run the generator off the critical path, queue the result if
-        anything came back."""
+        anything came back. `append_to_context=False` keeps the filler
+        out of LLM history — otherwise the next response sees the filler
+        as if the assistant said it and may echo / extend it.
+        """
         try:
             phrase = await coro_factory()
         except Exception as e:
@@ -330,7 +333,7 @@ async def run_bot(webrtc_connection) -> None:
             return
         if phrase:
             logger.info(f"[filler:{tag}] {phrase!r}")
-            await task.queue_frame(TTSSpeakFrame(phrase))
+            await task.queue_frame(TTSSpeakFrame(phrase, append_to_context=False))
 
     async def _progress_loop(tool_name: str):
         """Periodic generative progress for SLOW tools."""

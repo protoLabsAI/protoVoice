@@ -99,7 +99,10 @@ class BackchannelController(FrameProcessor):
         if not phrase:
             return
         logger.info(f"[backchannel] {phrase!r}")
-        frame = TTSSpeakFrame(phrase)
+        # Backchannels MUST stay out of LLM context — they're listener
+        # noises, not assistant turns. Otherwise the LLM thinks it just
+        # said "mm-hmm" and may continue from there.
+        frame = TTSSpeakFrame(phrase, append_to_context=False)
         if self._emitter is not None:
             await self._emitter(frame)
         else:

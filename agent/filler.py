@@ -262,8 +262,19 @@ class FillerGenerator:
             "You generate ONE 'thinking out loud' filler line for a voice "
             "agent that's about to run a tool. The filler will be spoken "
             "immediately — it must sound like a natural in-line hesitation, "
-            "NOT an announcement or a sentence. Output ONLY the filler text, "
-            "no quotes, no markdown, no explanation."
+            "NOT an announcement or a sentence. Output ONLY the filler "
+            "text, no quotes, no markdown, no explanation.\n\n"
+            "CRITICAL — what filler must NOT do:\n"
+            "  - never include a factual answer, name, number, date, or "
+            "    detail from the user's topic. The actual answer comes "
+            "    AFTER this — saying any of it now causes the agent to "
+            "    speak the answer twice.\n"
+            "  - never restate the user's question or summarize what they "
+            "    asked.\n"
+            "  - never make claims about what you found or will find.\n"
+            "Filler is ONLY about the act of checking — referring to the "
+            "topic abstractly is fine ('let me look that up'), but never "
+            "concretely ('let me check John's name')."
         )
         user_parts = [
             f"Tool the agent is about to run: {tool_name}",

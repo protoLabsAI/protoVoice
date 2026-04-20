@@ -108,14 +108,14 @@ class DeliveryController(FrameProcessor):
 
     async def _emit(self, phrase: str) -> None:
         logger.info(f"[delivery] emit {phrase[:60]!r}")
-        frame = TTSSpeakFrame(phrase)
+        # append_to_context=False — push deliveries are spoken directly;
+        # they shouldn't show up as part of the assistant's LLM history
+        # (the underlying tool already injected its result via the proper
+        # channel — see app.py llm.supports_developer_role=False).
+        frame = TTSSpeakFrame(phrase, append_to_context=False)
         if self._emitter is not None:
             await self._emitter(frame)
         else:
-            # Fallback for tests / no-task contexts. Not reliable during a
-            # live session because push_frame from a foreign coroutine may
-            # miss the pipeline's internal dispatch, but at least doesn't
-            # silently eat the delivery.
             logger.warning(
                 "[delivery] no emitter wired; falling back to push_frame"
             )
