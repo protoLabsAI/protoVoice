@@ -230,6 +230,11 @@ async def run_bot(webrtc_connection) -> None:
             },
         ),
     )
+    # vLLM (and most non-OpenAI endpoints) reject `role: developer`. Pipecat
+    # uses that role to inject async-tool results back into the context;
+    # without this flip we 400 on every turn after a slow_research returns.
+    # The adapter converts developer → user when this is False.
+    llm.supports_developer_role = False
     tts_kwargs: dict = {"backend": tts_backend}
     if skill.voice:
         if tts_backend == "kokoro":
