@@ -214,31 +214,55 @@ async def _dispatch_a2a(delegate: Delegate, query: str, *, timeout: float) -> st
 
 
 async def _dispatch_openai(delegate: Delegate, query: str, *, timeout: float) -> str:
-    """One-shot non-streaming chat completion."""
-    from openai import AsyncOpenAI
-    client = AsyncOpenAI(
-        api_key=delegate.openai_api_key,
-        base_url=delegate.url,
-        timeout=timeout,
-    )
+    """One-shot non-streaming chat completion via plain httpx.
+
+    We deliberately avoid the OpenAI SDK here — it adds `x-stainless-*`
+    fingerprint headers + a `user-agent: AsyncOpenAI/…` string that some
+    proxies (workstacean's WAF being the reason we found out) block. The
+    endpoint contract is simple enough that raw httpx is cleaner.
+    """
     sys_prompt = delegate.system_prompt or (
         "You are a research assistant. Answer thoroughly but concisely "
         "(2-4 sentences). Plain text only — no markdown, no lists. "
         "The answer will be spoken aloud verbatim."
     )
+    headers = {"Content-Type": "application/json"}
+    if delegate.openai_api_key and delegate.openai_api_key != "not-needed":
+        # Both standard (Authorization: Bearer) and workstacean-style
+        # (X-API-Key) are accepted by the servers we target today.
+        # Bearer is the OpenAI contract; sticking with that.
+        headers["Authorization"] = f"Bearer {delegate.openai_api_key}"
+    payload = {
+        "model": delegate.model,
+        "messages": [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": query},
+        ],
+        "max_tokens": delegate.max_tokens,
+        "temperature": delegate.temperature,
+        "stream": False,
+        # vLLM-hosted Qwen3.5/3.6 models emit reasoning into a separate
+        # field unless this is off. Harmless for gateways that ignore it.
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
     try:
-        r = await client.chat.completions.create(
-            model=delegate.model,
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": query},
-            ],
-            max_tokens=delegate.max_tokens,
-            temperature=delegate.temperature,
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-        )
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(
+                f"{delegate.url.rstrip('/')}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
     except (httpx.ConnectError, httpx.ConnectTimeout, OSError) as e:
         raise DelegateError(f"{delegate.name} unreachable: {e}") from e
     except Exception as e:
         raise DelegateError(f"{delegate.name}: {e}") from e
-    return (r.choices[0].message.content or "").strip()
+
+    if r.status_code != 200:
+        raise DelegateError(
+            f"{delegate.name}: HTTP {r.status_code} — {r.text[:200]}"
+        )
+    try:
+        body = r.json()
+        return (body["choices"][0]["message"]["content"] or "").strip()
+    except Exception as e:
+        raise DelegateError(f"{delegate.name}: malformed response ({e})") from e

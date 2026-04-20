@@ -11,34 +11,32 @@
 # Add as many as you want. Empty list = `delegate_to` is not registered.
 
 delegates:
-  # ─── A2A: ava (chief of staff / orchestrator) ──────────────────────
+  # ─── Ava — chief of staff, served OpenAI-compat via workstacean ─────
+  # Ava is now an in-process DeepAgent inside workstacean (standalone
+  # A2A endpoint was archived 2026-04-12). Reached via the OpenAI
+  # chat-completions API with model="ava".
   - name: ava
     description: >-
       Chief of staff for the protoLabs fleet. Best for project status
-      reports, coordination across other agents, planning a feature,
-      bug triage, and anything where the right answer requires looking
-      at several systems (board, CI, incidents). Has her own tools and
+      reports (sitreps), coordination across other agents, planning a
+      feature, bug triage, and anything that needs a wider look across
+      the board, CI, and incidents. Has her own sub-agents and
       delegation authority.
-    type: a2a
-    url: ${AVA_URL:-http://ava:3008/a2a}
-    auth:
-      scheme: apiKey
-      credentialsEnv: AVA_API_KEY
+    type: openai
+    url: https://ava.proto-labs.ai/v1
+    model: ava
+    api_key_env: WORKSTACEAN_API_KEY
 
-  # ─── OpenAI-compatible: heavy reasoning model via gateway ──────────
-  # Uncomment when the gateway is wired. Example shape:
+  # ─── Add more delegates here as you wire them up ────────────────────
+  # Example — a heavy reasoning model through the LiteLLM gateway:
   #
   # - name: opus
   #   description: >-
   #     Heavy reasoning model. Use when the user wants analysis,
-  #     summarization, or a thorough explanation of a topic — anything
-  #     that needs depth more than current facts.
+  #     summarization, or a thorough explanation of a topic.
   #   type: openai
   #   url: http://gateway:4000/v1
   #   model: claude-opus-4-6
   #   api_key_env: LITELLM_MASTER_KEY
-  #   max_tokens: 400
-  #   temperature: 0.4
   #   system_prompt: >-
-  #     You are a research assistant. Answer thoroughly but concisely
-  #     (2-4 sentences). Plain text only — no markdown.
+  #     You are a research assistant. Answer thoroughly but concisely.
