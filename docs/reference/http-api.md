@@ -1,0 +1,175 @@
+# HTTP API
+
+Served by the `protovoice` FastAPI app on `PORT` (default 7866).
+
+## `GET /`
+
+Returns the browser client HTML. Single-page; click Start to connect.
+
+## `GET /healthz`
+
+```json
+{
+  "status": "ok",
+  "tts_backend": "fish",
+  "verbosity": "brief",
+  "known_agents": ["ava"],
+  "skill": "default",
+  "skills": ["default", "chef"]
+}
+```
+
+Used by Docker HEALTHCHECK and external monitoring.
+
+## `GET /api/verbosity`
+
+```json
+{"verbosity":"brief"}
+```
+
+## `POST /api/verbosity`
+
+```http
+POST /api/verbosity
+Content-Type: application/json
+
+{"level":"narrated"}
+```
+
+Accepts `silent` / `brief` / `narrated` / `chatty`. Returns the new value or `{"error":"..."}` on invalid input.
+
+Session-level (module singleton for now); shared across all connected clients. Per-session keying is planned for multi-tenant.
+
+## `GET /api/skills`
+
+```json
+{
+  "active": "default",
+  "skills": [
+    {"slug": "default", "name": "Default", "description": ""},
+    {"slug": "chef", "name": "Chef Bruno", "description": "An Italian-American chef..."}
+  ]
+}
+```
+
+## `POST /api/skills`
+
+```http
+POST /api/skills
+Content-Type: application/json
+
+{"slug": "chef"}
+```
+
+Applies on the next Start click — skill is snapshotted at connect time. Returns `{"error":"..."}` if the slug is unknown.
+
+## `GET /api/voice/references`
+
+```json
+{"backend": "fish", "references": ["josh_sample_1", "voice_01", "voice_02"]}
+```
+
+Returns the Fish server's saved reference IDs. Empty list if `TTS_BACKEND` isn't `fish`.
+
+## `POST /api/voice/clone`
+
+Multipart upload — clones a new voice AND creates a skill pointing at it.
+
+```http
+POST /api/voice/clone
+Content-Type: multipart/form-data
+
+audio:       <file>       required — 10-30 s WAV/MP3/FLAC/OGG
+slug:        <string>     required — lowercase [a-z0-9\-_] 2-64 chars
+name:        <string>     optional — defaults to title-cased slug
+transcript:  <string>     optional — omit to auto-transcribe via Whisper
+description: <string>     optional
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "slug": "alex",
+  "name": "Alex",
+  "transcript": "...",
+  "auto_transcribed": true
+}
+```
+
+Side effects:
+
+- Saved reference on the Fish server (`POST /v1/references/add`)
+- New YAML at `config/skills/<slug>.yaml` pointing at the reference, reusing `SOUL.md` for the system prompt
+- In-memory skill dict reloaded — the dropdown picks up the new skill immediately
+
+Returns `{"error": "..."}` if: the slug collides with an existing skill, Whisper produces empty text, Fish rejects the reference, etc.
+
+## `POST /api/offer`
+
+Pipecat `SmallWebRTCTransport` signalling. Accepts the SDP offer, instantiates a `SmallWebRTCConnection`, returns the SDP answer + `pc_id`.
+
+```http
+POST /api/offer
+Content-Type: application/json
+
+{
+  "sdp": "v=0\r\no=...",
+  "type": "offer"
+}
+```
+
+Response:
+
+```json
+{
+  "sdp": "v=0\r\no=...",
+  "type": "answer",
+  "pc_id": "SmallWebRTCConnection#0-<uuid>"
+}
+```
+
+See [WebRTC Protocol](./webrtc-protocol) for the full handshake.
+
+## `PATCH /api/offer`
+
+Trickle ICE candidates. Required after the POST answer returns with a `pc_id`.
+
+```http
+PATCH /api/offer
+Content-Type: application/json
+
+{
+  "pc_id": "SmallWebRTCConnection#0-<uuid>",
+  "candidates": [
+    {
+      "candidate": "candidate:1 1 udp 2113667326 192.168.1.10 58387 typ host",
+      "sdp_mid": "0",
+      "sdp_mline_index": 0
+    }
+  ]
+}
+```
+
+Returns `{"status":"success"}` on accepted, `404` if `pc_id` is unknown (e.g. connection expired).
+
+## `GET /.well-known/agent-card.json`
+
+A2A agent card. Aliased as `/.well-known/agent.json` for legacy callers. Cached one minute (`Cache-Control: public, max-age=60`).
+
+## `POST /a2a`
+
+JSON-RPC 2.0 inbound. Supports `method: "message/send"`. Requires `X-API-Key` or `Authorization: Bearer <A2A_AUTH_TOKEN>` when `A2A_AUTH_TOKEN` is set.
+
+Returns an A2A task result with `artifacts[0].parts[0]` containing the assistant text. See [A2A Integration](/guides/a2a-integration) for the full flow.
+
+## `POST /a2a/callback`
+
+Receives push-notification results from agents we dispatched to. Accepts flexible shapes; looks for text at `body.text`, `body.result.artifacts[].parts[].text`, or `body.message.parts[].text`.
+
+When an active voice session exists, speaks the result via the `DeliveryController` with `next_silence` policy. Otherwise returns `{"ok": true, "delivered": false, "reason": "no active session"}`.
+
+## `GET /static/*`
+
+Static assets from `./static/`. Currently used only for the browser client.

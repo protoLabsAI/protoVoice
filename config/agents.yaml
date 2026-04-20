@@ -1,0 +1,22 @@
+# protoLabs A2A agent registry — consumed by a2a/registry.py.
+# Schema matches protoWorkstacean's workspace/agents.yaml so the same file
+# can be shared across the fleet.
+
+agents:
+  # Ava — Chief of Staff / orchestrator. Everything routes through her first.
+  - name: ava
+    url: ${AVA_URL:-http://ava-host:3008/a2a}
+    auth:
+      scheme: apiKey
+      credentialsEnv: AVA_API_KEY
+    skills:
+      - name: chat
+        description: Free-form conversation; routes to subagents automatically
+      - name: sitrep
+        description: System status report — projects, CI, incidents
+      - name: plan
+        description: Break down a PRD into an actionable implementation plan
+
+  # Add specialist agents here as they come online. Recommended pattern is
+  # still "dispatch through ava" rather than direct, so the orchestrator
+  # keeps global context; but direct is fine for tight voice loops.

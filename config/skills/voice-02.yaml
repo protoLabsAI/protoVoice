@@ -1,0 +1,7 @@
+slug: voice-02
+name: Voice 02
+description: Saved Fish reference voice_02 — rename if you know whose voice this is.
+
+system_prompt_file: ../SOUL.md
+tts_backend: fish
+voice: voice_02
