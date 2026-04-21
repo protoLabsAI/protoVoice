@@ -73,6 +73,8 @@ const fragmentShader = /* glsl */ `
   uniform float uSmoothness;
   uniform float uAsymmetry;
   uniform float uAtmosphereGlow;
+  uniform vec3 uClickDir;
+  uniform float uClickStrength;
   varying vec3 vLocalPosition;
   varying vec3 vNormal;
   varying vec3 vViewPosition;
@@ -158,6 +160,13 @@ const fragmentShader = /* glsl */ `
     finalColor *= edgeAA;
     float maxLuma = max(finalColor.r, max(finalColor.g, finalColor.b));
     float alpha = clamp(maxLuma * 1.5, 0.0, 1.0) * edgeAA;
+
+    // Click bloom — localized brightening on the hemisphere facing uClickDir.
+    vec3 localNormal = normalize(vLocalPosition);
+    float clickBoost = smoothstep(0.25, 1.0, dot(localNormal, uClickDir)) * uClickStrength;
+    finalColor += uPrimaryColor * clickBoost * 0.7;
+    alpha = clamp(alpha + clickBoost * 0.35, 0.0, 1.0);
+
     gl_FragColor = vec4(finalColor, alpha);
   }
 `;
@@ -165,10 +174,12 @@ const fragmentShader = /* glsl */ `
 const atmosphereVertexShader = /* glsl */ `
   varying vec3 vNormal;
   varying vec3 vViewPosition;
+  varying vec3 vLocalPos;
   void main() {
     vNormal = normalize(normalMatrix * normal);
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     vViewPosition = -mvPosition.xyz;
+    vLocalPos = position;
     gl_Position = projectionMatrix * mvPosition;
   }
 `;
@@ -177,8 +188,11 @@ const atmosphereFragmentShader = /* glsl */ `
   uniform vec3 uColor;
   uniform float uGlow;
   uniform float uLevel;
+  uniform vec3 uClickDir;
+  uniform float uClickStrength;
   varying vec3 vNormal;
   varying vec3 vViewPosition;
+  varying vec3 vLocalPos;
   void main() {
     vec3 normal = normalize(vNormal);
     vec3 viewDir = normalize(vViewPosition);
@@ -187,6 +201,11 @@ const atmosphereFragmentShader = /* glsl */ `
     float innerFadePoint = clamp(1.0 - uLevel, 0.0, 0.99);
     float centerFade = smoothstep(1.0, innerFadePoint, vdn);
     float alpha = edgeFade * centerFade * uGlow;
+
+    // Click bloom — amplify halo on the clicked hemisphere.
+    float clickBoost = smoothstep(0.0, 1.0, dot(normalize(vLocalPos), uClickDir)) * uClickStrength;
+    alpha *= (1.0 + clickBoost * 2.5);
+
     gl_FragColor = vec4(uColor, alpha);
   }
 `;
@@ -219,21 +238,26 @@ const ChromaticAberrationShader = {
 };
 
 // --- Tuning constants -------------------------------------------------------
-// Envelope — asymmetric attack/release on the raw RMS so voice onsets "pop"
-// but gaps between syllables don't flicker. Then a slower second stage
-// smooths visual judder.
-const ENV_ATTACK = 0.30;
-const ENV_RELEASE = 0.10;
+// Envelope — asymmetric attack/release on the raw RMS. Fast attack catches
+// voice onsets; slow release spans the gaps between syllables so the state
+// machine doesn't flip on every breath. Bot envelope releases faster so the
+// speaking pump decays naturally when the bot stops talking.
 const ENV_STAGE2 = 0.25;
+const ENV_USER = { attack: 0.35, release: 0.04 };  // slow release → state-stable
+const ENV_BOT  = { attack: 0.30, release: 0.12 };  // faster → pump settles
 
 // Byte-domain RMS scaling. Silence is ~0.003, shouting peaks ~0.35.
 const NORM_FLOOR = 0.020;
 const NORM_CEIL  = 0.300;
 
 // State machine thresholds (on the normalized envelope, not raw RMS).
-const SPEAK_THRESHOLD = 0.08;
-const THINK_DWELL_MS  = 1400;   // after user stops, how long we sit in "thinking"
-const STATE_XFADE_MS  = 320;    // state-to-state interpolation duration
+// Entry threshold is higher than exit threshold — classic hysteresis to
+// prevent state flip-flopping.
+const SPEAK_ENTER = 0.08;
+const SPEAK_EXIT  = 0.035;
+const LISTEN_MIN_DWELL_MS = 500;   // stay in listening at least this long
+const THINK_DWELL_MS = 1400;       // "handoff" beat after user stops
+const STATE_XFADE_MS = 320;        // state-to-state interpolation duration
 
 // Idle breath — two non-commensurate low-frequency sines for life-without-loops.
 const BREATH_HZ_1 = 0.10;
@@ -258,9 +282,14 @@ function rmsFromAnalyser(analyser, buf) {
 // Asymmetric two-stage envelope follower. Maps raw RMS → [0, 1] with heavy
 // smoothing and fast-up / slow-down response.
 class Envelope {
-  constructor() { this.s1 = 0; this.s2 = 0; }
+  constructor({ attack, release }) {
+    this.attack = attack;
+    this.release = release;
+    this.s1 = 0;
+    this.s2 = 0;
+  }
   update(raw) {
-    const k1 = raw > this.s1 ? ENV_ATTACK : ENV_RELEASE;
+    const k1 = raw > this.s1 ? this.attack : this.release;
     this.s1 += (raw - this.s1) * k1;
     this.s2 += (this.s1 - this.s2) * ENV_STAGE2;
     return clamp01((this.s2 - NORM_FLOOR) / (NORM_CEIL - NORM_FLOOR));
@@ -298,18 +327,18 @@ function stateSnapshot(state, base) {
         secondary: withHSL(base.secondaryEnergy, 0.80, 0.70),
       };
     case 'listening':
-      // Pull inward, desaturate slightly, slow everything — the orb is "taking in."
+      // Small inward pull + slightly cooler; the orb "takes in" but stays alive.
       return {
-        density: base.density * 0.55,
-        glow: base.atmosphereGlow * 0.55,
-        speed: base.speed * 0.55,
-        ca: base.chromaticAberration * 0.45,
-        asymmetry: base.asymmetry * 0.7,
-        internalAnim: base.internalAnim * 0.65,
-        rotation: base.orbRotation * 0.45,
-        scale: 0.88,                       // inward cue
-        primary: withHSL(base.primaryEnergy, 0.85, 0.82),
-        secondary: withHSL(base.secondaryEnergy, 0.85, 0.82),
+        density: base.density * 0.80,
+        glow: base.atmosphereGlow * 0.85,
+        speed: base.speed * 0.65,
+        ca: base.chromaticAberration * 0.6,
+        asymmetry: base.asymmetry * 0.85,
+        internalAnim: base.internalAnim * 0.80,
+        rotation: base.orbRotation * 0.55,
+        scale: 0.93,                       // inward cue (was 0.88 — too small)
+        primary: withHSL(base.primaryEnergy, 0.95, 0.95),
+        secondary: withHSL(base.secondaryEnergy, 0.95, 0.95),
       };
     case 'thinking':
       // Neither cool nor warm; slightly faster internal swirl suggesting work.
@@ -385,6 +414,8 @@ export class VoiceOrb {
       uInternalAnim: { value: this.basePreset.internalAnim },
       uSmoothness: { value: this.basePreset.smoothness },
       uAsymmetry: { value: this.basePreset.asymmetry },
+      uClickDir: { value: new THREE.Vector3(0, 0, 1) },
+      uClickStrength: { value: 0 },
     };
 
     const material = new THREE.ShaderMaterial({
@@ -397,6 +428,8 @@ export class VoiceOrb {
       uColor: { value: new THREE.Color(this.basePreset.primaryEnergy) },
       uGlow: { value: this.basePreset.atmosphereGlow },
       uLevel: { value: this.basePreset.atmosphereLevel },
+      uClickDir: this.uniforms.uClickDir,       // shared — set once, read twice
+      uClickStrength: this.uniforms.uClickStrength,
     };
     const atmosphereMaterial = new THREE.ShaderMaterial({
       vertexShader: atmosphereVertexShader,
@@ -424,7 +457,10 @@ export class VoiceOrb {
     this._audioCtx = null;
     this._analysers = { local: null, remote: null };
     this._bufs = { local: null, remote: null };
-    this._env = { local: new Envelope(), remote: new Envelope() };
+    this._env = {
+      local: new Envelope(ENV_USER),
+      remote: new Envelope(ENV_BOT),
+    };
 
     // State machine.
     this.state = 'idle';
@@ -433,7 +469,17 @@ export class VoiceOrb {
     this._stateTo   = this._stateSnap;
     this._stateXfadeStart = 0;        // ms
     this._stateXfadeActive = false;
+    this._stateEnteredMs = performance.now();
     this._lastUserSpeechMs = -Infinity;
+
+    // Mouse interaction: drag-to-spin with momentum, click-to-pulse.
+    this._raycaster = new THREE.Raycaster();
+    this._ndc = new THREE.Vector2();
+    this._dragging = false;
+    this._dragMoved = 0;              // px of movement since pointerdown
+    this._lastPointer = { x: 0, y: 0, t: 0 };
+    this._dragVel = { x: 0, y: 0 };   // radians per second, decays when idle
+    this._attachPointerHandlers();
 
     this._startTimeMs = performance.now();
     this.clock = new THREE.Clock();
@@ -443,6 +489,75 @@ export class VoiceOrb {
     this._running = true;
     this._tick = this._tick.bind(this);
     requestAnimationFrame(this._tick);
+  }
+
+  _attachPointerHandlers() {
+    const dom = this.renderer.domElement;
+    dom.style.touchAction = 'none';
+
+    const down = (e) => {
+      dom.setPointerCapture(e.pointerId);
+      this._dragging = true;
+      this._dragMoved = 0;
+      this._lastPointer = { x: e.clientX, y: e.clientY, t: performance.now() };
+      this._dragVel.x = 0;
+      this._dragVel.y = 0;
+    };
+    const move = (e) => {
+      if (!this._dragging) return;
+      const nowMs = performance.now();
+      const dt = Math.max(1, nowMs - this._lastPointer.t) / 1000;  // seconds, min 1ms
+      const dx = e.clientX - this._lastPointer.x;
+      const dy = e.clientY - this._lastPointer.y;
+      this._dragMoved += Math.hypot(dx, dy);
+      const SENSITIVITY = 0.006;      // radians per pixel
+      this.orb.rotation.y += dx * SENSITIVITY;
+      this.orb.rotation.x += dy * SENSITIVITY;
+      // Velocity for momentum — exponential smoothing so a tiny final
+      // micro-move doesn't clobber a big fling.
+      const instVy = (dx * SENSITIVITY) / dt;
+      const instVx = (dy * SENSITIVITY) / dt;
+      this._dragVel.y = lerp(this._dragVel.y, instVy, 0.5);
+      this._dragVel.x = lerp(this._dragVel.x, instVx, 0.5);
+      this._lastPointer = { x: e.clientX, y: e.clientY, t: nowMs };
+    };
+    const up = (e) => {
+      if (!this._dragging) return;
+      this._dragging = false;
+      try { dom.releasePointerCapture(e.pointerId); } catch (_) {}
+      // If movement was tiny, treat as click → pulse the orb at that spot.
+      if (this._dragMoved < 6) this._pulseAt(e.clientX, e.clientY);
+    };
+
+    dom.addEventListener('pointerdown', down);
+    dom.addEventListener('pointermove', move);
+    dom.addEventListener('pointerup', up);
+    dom.addEventListener('pointercancel', up);
+    this._pointerHandlers = { dom, down, move, up };
+  }
+
+  _pulseAt(clientX, clientY) {
+    // Convert client → NDC → ray → first hit on the orb (world space) → local.
+    this._ndc.set(
+      (clientX / window.innerWidth) * 2 - 1,
+      -(clientY / window.innerHeight) * 2 + 1,
+    );
+    this._raycaster.setFromCamera(this._ndc, this.camera);
+    const hits = this._raycaster.intersectObject(this.orb, false);
+    let dir;
+    if (hits.length) {
+      const local = this.orb.worldToLocal(hits[0].point.clone());
+      dir = local.normalize();
+    } else {
+      // Fallback: use the ray direction into local space.
+      dir = this._raycaster.ray.direction.clone();
+      this.orb.worldToLocal(
+        this._raycaster.ray.origin.clone().add(dir.multiplyScalar(10))
+      );
+      dir.normalize();
+    }
+    this.uniforms.uClickDir.value.copy(dir);
+    this.uniforms.uClickStrength.value = 1.0;
   }
 
   _onResize() {
@@ -501,6 +616,13 @@ export class VoiceOrb {
   destroy() {
     this._running = false;
     window.removeEventListener('resize', this._onResize);
+    if (this._pointerHandlers) {
+      const { dom, down, move, up } = this._pointerHandlers;
+      dom.removeEventListener('pointerdown', down);
+      dom.removeEventListener('pointermove', move);
+      dom.removeEventListener('pointerup', up);
+      dom.removeEventListener('pointercancel', up);
+    }
     this.detachStream('local');
     this.detachStream('remote');
     if (this._audioCtx) { try { this._audioCtx.close(); } catch (_) {} this._audioCtx = null; }
@@ -511,13 +633,26 @@ export class VoiceOrb {
   }
 
   _deriveState(bot, user, nowMs) {
-    if (bot > SPEAK_THRESHOLD) return 'speaking';
-    if (user > SPEAK_THRESHOLD) {
+    // Bot overrides everything.
+    const botGate = this.state === 'speaking' ? SPEAK_EXIT : SPEAK_ENTER;
+    if (bot > botGate) return 'speaking';
+
+    // Hysteresis on user: entering listening needs higher level than staying.
+    const userGate = this.state === 'listening' ? SPEAK_EXIT : SPEAK_ENTER;
+    const userActive = user > userGate;
+    if (userActive) {
       this._lastUserSpeechMs = nowMs;
       return 'listening';
     }
-    // Brief "thinking" dwell after the user stops, before the bot gets its
-    // first audio frame back. Makes the handoff feel intentional.
+
+    // Min dwell — once we're in listening, hold at least LISTEN_MIN_DWELL_MS
+    // so syllable gaps don't briefly kick us out.
+    if (this.state === 'listening' &&
+        (nowMs - this._stateEnteredMs) < LISTEN_MIN_DWELL_MS) {
+      return 'listening';
+    }
+
+    // Brief "thinking" dwell after user stops, before bot starts speaking.
     if (nowMs - this._lastUserSpeechMs < THINK_DWELL_MS) return 'thinking';
     return 'idle';
   }
@@ -555,6 +690,7 @@ export class VoiceOrb {
     const nextState = this._deriveState(bot, user, nowMs);
     if (nextState !== this.state) {
       this.state = nextState;
+      this._stateEnteredMs = nowMs;
       this._beginStateCrossfade(nextState);
     }
 
@@ -598,9 +734,26 @@ export class VoiceOrb {
     this.orb.scale.setScalar(scale);
 
     // Time + rotation integrate by delta (continuous, no smoothing needed).
+    // Auto-rotation comes from state, plus any user-drag momentum on top.
     this.uniforms.uTime.value += delta * s.speed;
-    this.orb.rotation.y += delta * s.rotation;
-    this.orb.rotation.x += delta * (s.rotation * 0.5);
+    this.orb.rotation.y += delta * s.rotation + this._dragVel.y * delta;
+    this.orb.rotation.x += delta * (s.rotation * 0.5) + this._dragVel.x * delta;
+    // Decay drag velocity when the user isn't holding the pointer.
+    if (!this._dragging) {
+      const DAMP = 0.96;  // ~4% drop per frame → ~0.7s half-life at 60fps
+      this._dragVel.x *= DAMP;
+      this._dragVel.y *= DAMP;
+      if (Math.abs(this._dragVel.x) < 0.001) this._dragVel.x = 0;
+      if (Math.abs(this._dragVel.y) < 0.001) this._dragVel.y = 0;
+    }
+
+    // Decay click-bloom over ~0.6s.
+    if (this.uniforms.uClickStrength.value > 0) {
+      this.uniforms.uClickStrength.value *= 0.93;
+      if (this.uniforms.uClickStrength.value < 0.01) {
+        this.uniforms.uClickStrength.value = 0;
+      }
+    }
 
     // ---- Render ---------------------------------------------------------
     this.orb.updateMatrixWorld();
