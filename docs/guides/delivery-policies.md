@@ -113,7 +113,11 @@ On the next session connect with the same skill:
 
 Pattern from LangGraph's [interrupt + checkpointer](https://docs.langchain.com/oss/python/langgraph/interrupts) model + the A2A spec's requirement that push configs persist until task completion.
 
-## Known edge cases
+## Edge-case timers
 
-- **User mutes their own mic.** VAD never sees user-stopped, so `next_silence` never fires. Fallback timer (planned): deliver after 10 s regardless.
-- **`when_asked` that never matches.** The result sits forever. No TTL yet; results accumulate. Planned: expire after N minutes.
+A watchdog ticks once per second while anything is queued:
+
+- **NEXT_SILENCE fallback** — if a `NEXT_SILENCE` item has been pending longer than `DELIVERY_NEXT_SILENCE_FALLBACK_SECS` (default **10 s**), drain it anyway. Handles the muted-mic case where VAD never emits a user-stopped frame.
+- **WHEN_ASKED TTL** — items that never match a keyword are silently dropped after `DELIVERY_WHEN_ASKED_TTL_SECS` (default **10 min**), so the queue doesn't accumulate forever.
+
+Both thresholds are env-configurable. Watchdog exits when the queue drains; re-arms on the next `deliver()`.

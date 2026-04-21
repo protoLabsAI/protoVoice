@@ -85,9 +85,27 @@ class _Pending:
     enqueued_at: float = field(default_factory=time.time)
 
 
+import os as _os
+
 # Silence (wait after UserStoppedSpeaking) before draining `next_silence`.
 # Keeps the filler from stepping on the tail of the user's utterance.
 _SILENCE_SETTLE_SECS = 0.6
+
+# NEXT_SILENCE fallback — if the user never produces UserStoppedSpeaking
+# (muted mic, zero talking), still drain after this many seconds. Solves
+# the "user mutes and result never lands" edge case.
+_NEXT_SILENCE_FALLBACK_SECS = float(
+    _os.environ.get("DELIVERY_NEXT_SILENCE_FALLBACK_SECS", "10")
+)
+
+# WHEN_ASKED TTL — items that never match a keyword expire after this long
+# so the pending queue doesn't accumulate forever.
+_WHEN_ASKED_TTL_SECS = float(
+    _os.environ.get("DELIVERY_WHEN_ASKED_TTL_SECS", "600")
+)
+
+# How often the watchdog ticks to check fallback timers + TTLs.
+_WATCHDOG_TICK_SECS = 1.0
 
 # Beyond this many pending items, low-priority stale ones get dropped so
 # the drain doesn't turn into a monologue. ProMemAssist (UIST '25)
@@ -127,6 +145,7 @@ class DeliveryController(FrameProcessor):
         self._user_speaking = False
         self._pending: list[_Pending] = []
         self._settle_task: asyncio.Task | None = None
+        self._watchdog_task: asyncio.Task | None = None
         # True once we've asked "want to hear them?" — stays true until
         # the user affirms or declines. Suppresses further NEXT_SILENCE
         # drains while awaiting response.
@@ -221,6 +240,9 @@ class DeliveryController(FrameProcessor):
         self._pending.append(
             _Pending(phrase=attributed, policy=effective_policy, priority=priority, keywords=keywords)
         )
+        # Kick the watchdog if it's not already running. Handles
+        # NEXT_SILENCE fallbacks + WHEN_ASKED TTLs.
+        self._ensure_watchdog()
         # If the user isn't currently speaking and there's something eligible
         # for NEXT_SILENCE, drain right away.
         if not self._user_speaking:
@@ -345,6 +367,53 @@ class DeliveryController(FrameProcessor):
             await self._drain_eligible(new_transcript=frame.text)
 
         await self.push_frame(frame, direction)
+
+    # --- Watchdog for fallback timers + TTLs ------------------------------
+
+    def _ensure_watchdog(self) -> None:
+        if self._watchdog_task is None or self._watchdog_task.done():
+            self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+
+    async def _watchdog_loop(self) -> None:
+        """Ticks every _WATCHDOG_TICK_SECS. Flushes NEXT_SILENCE items
+        whose age exceeds the fallback; drops WHEN_ASKED items past TTL.
+        Exits when the queue drains (re-armed next time something is
+        enqueued)."""
+        try:
+            while self._pending:
+                await asyncio.sleep(_WATCHDOG_TICK_SECS)
+                now = time.time()
+                # NEXT_SILENCE fallback — user may have muted; force-drain.
+                stale_next_silence = [
+                    p for p in self._pending
+                    if p.policy is DeliveryPolicy.NEXT_SILENCE
+                    and (now - p.enqueued_at) >= _NEXT_SILENCE_FALLBACK_SECS
+                ]
+                for item in stale_next_silence:
+                    logger.info(
+                        f"[delivery] NEXT_SILENCE fallback ({int(now - item.enqueued_at)}s): "
+                        f"{item.phrase[:60]!r}"
+                    )
+                    if item in self._pending:
+                        self._pending.remove(item)
+                        await self._emit(item.phrase)
+                # WHEN_ASKED TTL — silently drop items that aged out.
+                expired = [
+                    p for p in self._pending
+                    if p.policy is DeliveryPolicy.WHEN_ASKED
+                    and (now - p.enqueued_at) >= _WHEN_ASKED_TTL_SECS
+                ]
+                for item in expired:
+                    logger.info(
+                        f"[delivery] WHEN_ASKED TTL expired after "
+                        f"{int(now - item.enqueued_at)}s: {item.phrase[:60]!r}"
+                    )
+                    if item in self._pending:
+                        self._pending.remove(item)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.exception(f"[delivery] watchdog crashed: {e}")
 
     def _prune_overflow(self) -> None:
         """Before draining, drop low-priority stale items if we have more
