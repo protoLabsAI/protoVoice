@@ -1,8 +1,11 @@
 // Voice-reactive fractal orb visualizer.
 //
-// Shader + base fractal logic by sabosugi (https://codepen.io/sabosugi/pen/EagJwmv).
-// Kept verbatim; we wrap it in a class and drive the uniforms from two AnalyserNodes
-// (local mic + remote bot audio) so the orb pumps with the voice session.
+// Shader + preset values by sabosugi (https://codepen.io/sabosugi/pen/EagJwmv),
+// kept verbatim. The driver below is our own and follows conventions from
+// shipping voice UIs (LiveKit Aura, ChatGPT Advanced Voice, Siri, Material
+// Motion): asymmetric envelope follower, 4-state machine with ~300 ms
+// crossfades, idle breathing at ~0.10 Hz, radial push/pull cue for
+// who's-speaking, HSL saturation/luminance shift for state color.
 
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -215,8 +218,32 @@ const ChromaticAberrationShader = {
   `,
 };
 
+// --- Tuning constants -------------------------------------------------------
+// Envelope — asymmetric attack/release on the raw RMS so voice onsets "pop"
+// but gaps between syllables don't flicker. Then a slower second stage
+// smooths visual judder.
+const ENV_ATTACK = 0.30;
+const ENV_RELEASE = 0.10;
+const ENV_STAGE2 = 0.25;
+
+// Byte-domain RMS scaling. Silence is ~0.003, shouting peaks ~0.35.
+const NORM_FLOOR = 0.020;
+const NORM_CEIL  = 0.300;
+
+// State machine thresholds (on the normalized envelope, not raw RMS).
+const SPEAK_THRESHOLD = 0.08;
+const THINK_DWELL_MS  = 1400;   // after user stops, how long we sit in "thinking"
+const STATE_XFADE_MS  = 320;    // state-to-state interpolation duration
+
+// Idle breath — two non-commensurate low-frequency sines for life-without-loops.
+const BREATH_HZ_1 = 0.10;
+const BREATH_HZ_2 = 0.037;
+const BREATH_AMP  = 0.03;   // fraction of scale to modulate
+
 // --- Helpers ----------------------------------------------------------------
 const lerp = (a, b, t) => a + (b - a) * t;
+const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const easeInOutCubic = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
 function rmsFromAnalyser(analyser, buf) {
   analyser.getByteTimeDomainData(buf);
@@ -228,14 +255,114 @@ function rmsFromAnalyser(analyser, buf) {
   return Math.sqrt(sum / buf.length);
 }
 
+// Asymmetric two-stage envelope follower. Maps raw RMS → [0, 1] with heavy
+// smoothing and fast-up / slow-down response.
+class Envelope {
+  constructor() { this.s1 = 0; this.s2 = 0; }
+  update(raw) {
+    const k1 = raw > this.s1 ? ENV_ATTACK : ENV_RELEASE;
+    this.s1 += (raw - this.s1) * k1;
+    this.s2 += (this.s1 - this.s2) * ENV_STAGE2;
+    return clamp01((this.s2 - NORM_FLOOR) / (NORM_CEIL - NORM_FLOOR));
+  }
+  reset() { this.s1 = 0; this.s2 = 0; }
+}
+
+// Shift a color's saturation / luminance while preserving hue.
+function withHSL(hex, satMult, lumMult) {
+  const c = new THREE.Color(hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  c.getHSL(hsl);
+  return new THREE.Color().setHSL(
+    hsl.h,
+    clamp01(hsl.s * satMult),
+    clamp01(hsl.l * lumMult),
+  );
+}
+
+// Per-state target snapshot. These are the "resting" uniform values for a
+// given state; audio-driven modulation is added on top during render.
+function stateSnapshot(state, base) {
+  switch (state) {
+    case 'idle':
+      return {
+        density: base.density * 0.55,
+        glow: base.atmosphereGlow * 0.7,
+        speed: base.speed * 0.7,
+        ca: base.chromaticAberration * 0.4,
+        asymmetry: base.asymmetry * 0.8,
+        internalAnim: base.internalAnim * 0.55,
+        rotation: base.orbRotation * 0.55,
+        scale: 0.94,
+        primary: withHSL(base.primaryEnergy, 0.80, 0.70),
+        secondary: withHSL(base.secondaryEnergy, 0.80, 0.70),
+      };
+    case 'listening':
+      // Pull inward, desaturate slightly, slow everything — the orb is "taking in."
+      return {
+        density: base.density * 0.55,
+        glow: base.atmosphereGlow * 0.55,
+        speed: base.speed * 0.55,
+        ca: base.chromaticAberration * 0.45,
+        asymmetry: base.asymmetry * 0.7,
+        internalAnim: base.internalAnim * 0.65,
+        rotation: base.orbRotation * 0.45,
+        scale: 0.88,                       // inward cue
+        primary: withHSL(base.primaryEnergy, 0.85, 0.82),
+        secondary: withHSL(base.secondaryEnergy, 0.85, 0.82),
+      };
+    case 'thinking':
+      // Neither cool nor warm; slightly faster internal swirl suggesting work.
+      return {
+        density: base.density * 0.70,
+        glow: base.atmosphereGlow * 0.90,
+        speed: base.speed * 1.0,
+        ca: base.chromaticAberration * 0.7,
+        asymmetry: base.asymmetry * 0.9,
+        internalAnim: base.internalAnim * 1.25,
+        rotation: base.orbRotation * 0.85,
+        scale: 0.96,
+        primary: withHSL(base.primaryEnergy, 0.95, 0.90),
+        secondary: withHSL(base.secondaryEnergy, 0.95, 0.90),
+      };
+    case 'speaking':
+      // Push outward, full saturation/luminance; audio modulation layered on top.
+      return {
+        density: base.density * 0.90,
+        glow: base.atmosphereGlow * 1.10,
+        speed: base.speed * 1.05,
+        ca: base.chromaticAberration * 1.0,
+        asymmetry: base.asymmetry,
+        internalAnim: base.internalAnim * 1.0,
+        rotation: base.orbRotation * 1.0,
+        scale: 1.06,                       // outward cue
+        primary: new THREE.Color(base.primaryEnergy),
+        secondary: new THREE.Color(base.secondaryEnergy),
+      };
+  }
+}
+
+function lerpSnapshot(a, b, t) {
+  return {
+    density: lerp(a.density, b.density, t),
+    glow: lerp(a.glow, b.glow, t),
+    speed: lerp(a.speed, b.speed, t),
+    ca: lerp(a.ca, b.ca, t),
+    asymmetry: lerp(a.asymmetry, b.asymmetry, t),
+    internalAnim: lerp(a.internalAnim, b.internalAnim, t),
+    rotation: lerp(a.rotation, b.rotation, t),
+    scale: lerp(a.scale, b.scale, t),
+    primary: a.primary.clone().lerp(b.primary, t),
+    secondary: a.secondary.clone().lerp(b.secondary, t),
+  };
+}
+
 // --- Main class -------------------------------------------------------------
 export class VoiceOrb {
   constructor(container, { preset = 'Default' } = {}) {
     this.container = container;
     this.basePreset = { ...PRESETS[preset] };
-    this.params = { ...this.basePreset };
 
-    // Scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
     this.camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
@@ -243,22 +370,21 @@ export class VoiceOrb {
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(container.clientWidth, container.clientHeight);
-    this.renderer.setPixelRatio(this.params.dpr);
+    this.renderer.setPixelRatio(this.basePreset.dpr);
     container.appendChild(this.renderer.domElement);
 
-    // Uniforms
     this.uniforms = {
       uTime: { value: 0 },
       uLocalCamPos: { value: new THREE.Vector3() },
-      uPrimaryColor: { value: new THREE.Color(this.params.primaryEnergy) },
-      uSecondaryColor: { value: new THREE.Color(this.params.secondaryEnergy) },
-      uDensity: { value: this.params.density },
-      uFractalIters: { value: this.params.fractalIters },
-      uFractalScale: { value: this.params.fractalScale },
-      uFractalDecay: { value: this.params.fractalDecay },
-      uInternalAnim: { value: this.params.internalAnim },
-      uSmoothness: { value: this.params.smoothness },
-      uAsymmetry: { value: this.params.asymmetry },
+      uPrimaryColor: { value: new THREE.Color(this.basePreset.primaryEnergy) },
+      uSecondaryColor: { value: new THREE.Color(this.basePreset.secondaryEnergy) },
+      uDensity: { value: this.basePreset.density },
+      uFractalIters: { value: this.basePreset.fractalIters },
+      uFractalScale: { value: this.basePreset.fractalScale },
+      uFractalDecay: { value: this.basePreset.fractalDecay },
+      uInternalAnim: { value: this.basePreset.internalAnim },
+      uSmoothness: { value: this.basePreset.smoothness },
+      uAsymmetry: { value: this.basePreset.asymmetry },
     };
 
     const material = new THREE.ShaderMaterial({
@@ -268,9 +394,9 @@ export class VoiceOrb {
     });
 
     this.atmosphereUniforms = {
-      uColor: { value: new THREE.Color(this.params.primaryEnergy) },
-      uGlow: { value: this.params.atmosphereGlow },
-      uLevel: { value: this.params.atmosphereLevel },
+      uColor: { value: new THREE.Color(this.basePreset.primaryEnergy) },
+      uGlow: { value: this.basePreset.atmosphereGlow },
+      uLevel: { value: this.basePreset.atmosphereLevel },
     };
     const atmosphereMaterial = new THREE.ShaderMaterial({
       vertexShader: atmosphereVertexShader,
@@ -284,26 +410,32 @@ export class VoiceOrb {
     this.orb = new THREE.Mesh(geometry, material);
     this.scene.add(this.orb);
     this.atmosphereMesh = new THREE.Mesh(geometry, atmosphereMaterial);
-    this.atmosphereMesh.scale.setScalar(this.params.atmosphereScale);
+    this.atmosphereMesh.scale.setScalar(this.basePreset.atmosphereScale);
     this.orb.add(this.atmosphereMesh);
 
-    // Post
     this.composer = new EffectComposer(this.renderer);
-    this.composer.setPixelRatio(this.params.dpr);
+    this.composer.setPixelRatio(this.basePreset.dpr);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.caPass = new ShaderPass(ChromaticAberrationShader);
-    this.caPass.uniforms.uAmount.value = this.params.chromaticAberration;
+    this.caPass.uniforms.uAmount.value = this.basePreset.chromaticAberration;
     this.composer.addPass(this.caPass);
 
-    // Audio analysers — created lazily when a stream is attached.
+    // Audio analysers (created lazily).
     this._audioCtx = null;
     this._analysers = { local: null, remote: null };
     this._bufs = { local: null, remote: null };
-    this._rms = { local: 0, remote: 0 };
+    this._env = { local: new Envelope(), remote: new Envelope() };
 
-    // Drive target — what we animate the uniforms toward each frame.
-    this._target = { ...this.basePreset };
+    // State machine.
+    this.state = 'idle';
+    this._stateSnap = stateSnapshot('idle', this.basePreset);
+    this._stateFrom = this._stateSnap;
+    this._stateTo   = this._stateSnap;
+    this._stateXfadeStart = 0;        // ms
+    this._stateXfadeActive = false;
+    this._lastUserSpeechMs = -Infinity;
 
+    this._startTimeMs = performance.now();
     this.clock = new THREE.Clock();
     this._onResize = this._onResize.bind(this);
     window.addEventListener('resize', this._onResize);
@@ -326,31 +458,35 @@ export class VoiceOrb {
     const p = PRESETS[name];
     if (!p) return;
     this.basePreset = { ...p };
-    Object.assign(this._target, p);
-    // Swap immediately for values that don't need smoothing.
+    // Swap non-animated uniforms.
     this.uniforms.uFractalIters.value = p.fractalIters;
+    this.uniforms.uFractalScale.value = p.fractalScale;
+    this.uniforms.uFractalDecay.value = p.fractalDecay;
+    this.uniforms.uSmoothness.value   = p.smoothness;
+    this.atmosphereUniforms.uLevel.value = p.atmosphereLevel;
+    this.atmosphereMesh.scale.setScalar(p.atmosphereScale);
     this.renderer.setPixelRatio(p.dpr);
     this.composer.setPixelRatio(p.dpr);
+    // Crossfade into the new preset's current-state snapshot.
+    this._beginStateCrossfade(this.state);
   }
 
-  /**
-   * Hook an audio stream for level analysis.
-   * @param {MediaStream} stream
-   * @param {'local'|'remote'} kind — 'local' = user mic, 'remote' = bot audio
-   */
   attachStream(stream, kind) {
-    if (!this._audioCtx) this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    // Safari/Chrome sometimes suspend the context until user gesture.
-    if (this._audioCtx.state === 'suspended') this._audioCtx.resume().catch(() => {});
+    if (!this._audioCtx) {
+      this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (this._audioCtx.state === 'suspended') {
+      this._audioCtx.resume().catch(() => {});
+    }
     this.detachStream(kind);
     const source = this._audioCtx.createMediaStreamSource(stream);
     const analyser = this._audioCtx.createAnalyser();
-    analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.7;
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.55;
     source.connect(analyser);
-    // Intentionally NOT connected to destination — playback happens elsewhere.
     this._analysers[kind] = { source, analyser };
     this._bufs[kind] = new Uint8Array(analyser.fftSize);
+    this._env[kind].reset();
   }
 
   detachStream(kind) {
@@ -359,7 +495,7 @@ export class VoiceOrb {
     try { a.source.disconnect(); } catch (_) {}
     this._analysers[kind] = null;
     this._bufs[kind] = null;
-    this._rms[kind] = 0;
+    this._env[kind].reset();
   }
 
   destroy() {
@@ -374,56 +510,99 @@ export class VoiceOrb {
     }
   }
 
+  _deriveState(bot, user, nowMs) {
+    if (bot > SPEAK_THRESHOLD) return 'speaking';
+    if (user > SPEAK_THRESHOLD) {
+      this._lastUserSpeechMs = nowMs;
+      return 'listening';
+    }
+    // Brief "thinking" dwell after the user stops, before the bot gets its
+    // first audio frame back. Makes the handoff feel intentional.
+    if (nowMs - this._lastUserSpeechMs < THINK_DWELL_MS) return 'thinking';
+    return 'idle';
+  }
+
+  _beginStateCrossfade(nextState) {
+    // Snapshot where we are visually RIGHT NOW as the "from" so the crossfade
+    // starts from current values, not whatever the previous state target was.
+    this._stateFrom = { ...this._stateSnap,
+      primary: this._stateSnap.primary.clone(),
+      secondary: this._stateSnap.secondary.clone() };
+    this._stateTo = stateSnapshot(nextState, this.basePreset);
+    this._stateXfadeStart = performance.now();
+    this._stateXfadeActive = true;
+  }
+
   _tick() {
     if (!this._running) return;
     requestAnimationFrame(this._tick);
 
     const delta = this.clock.getDelta();
+    const nowMs = performance.now();
 
-    // Read audio levels.
-    for (const kind of ['local', 'remote']) {
-      const a = this._analysers[kind];
-      if (a) this._rms[kind] = rmsFromAnalyser(a.analyser, this._bufs[kind]);
+    // ---- Audio envelopes -------------------------------------------------
+    let bot = 0, user = 0;
+    if (this._analysers.remote) {
+      const raw = rmsFromAnalyser(this._analysers.remote.analyser, this._bufs.remote);
+      bot = this._env.remote.update(raw);
     }
-    const bot = this._rms.remote;
-    const user = this._rms.local;
-
-    // Map levels onto target uniforms, modulating on top of the base preset.
-    const base = this.basePreset;
-    this._target.density           = base.density           + bot * 4.0 + user * 1.0;
-    this._target.atmosphereGlow    = base.atmosphereGlow    + bot * 2.5;
-    this._target.speed             = base.speed             * (1.0 + bot * 1.5);
-    this._target.chromaticAberration = Math.min(0.05, base.chromaticAberration + bot * 0.03);
-    this._target.asymmetry         = Math.min(1.0, base.asymmetry + user * 0.4);
-    this._target.internalAnim      = base.internalAnim * (1.0 + bot * 1.0 + user * 0.3);
-    this._target.orbRotation       = base.orbRotation * (1.0 + bot * 0.5);
-
-    // Lerp the params toward the targets — fast attack, slower release.
-    const attack = 0.35;
-    const release = 0.08;
-    const approach = (key) => {
-      const t = this._target[key];
-      const v = this.params[key];
-      const k = t > v ? attack : release;
-      this.params[key] = lerp(v, t, k);
-    };
-    for (const key of ['density', 'atmosphereGlow', 'speed', 'chromaticAberration',
-                       'asymmetry', 'internalAnim', 'orbRotation']) {
-      approach(key);
+    if (this._analysers.local) {
+      const raw = rmsFromAnalyser(this._analysers.local.analyser, this._bufs.local);
+      user = this._env.local.update(raw);
     }
 
-    // Push params into uniforms.
-    this.uniforms.uDensity.value           = this.params.density;
-    this.uniforms.uAsymmetry.value         = this.params.asymmetry;
-    this.uniforms.uInternalAnim.value      = this.params.internalAnim;
-    this.atmosphereUniforms.uGlow.value    = this.params.atmosphereGlow;
-    this.caPass.uniforms.uAmount.value     = this.params.chromaticAberration;
+    // ---- State machine --------------------------------------------------
+    const nextState = this._deriveState(bot, user, nowMs);
+    if (nextState !== this.state) {
+      this.state = nextState;
+      this._beginStateCrossfade(nextState);
+    }
 
-    // Animate.
-    this.uniforms.uTime.value += delta * this.params.speed;
-    this.orb.rotation.y += delta * this.params.orbRotation;
-    this.orb.rotation.x += delta * (this.params.orbRotation * 0.5);
+    // Advance or settle the state crossfade.
+    if (this._stateXfadeActive) {
+      const t = clamp01((nowMs - this._stateXfadeStart) / STATE_XFADE_MS);
+      const e = easeInOutCubic(t);
+      this._stateSnap = lerpSnapshot(this._stateFrom, this._stateTo, e);
+      if (t >= 1) {
+        this._stateXfadeActive = false;
+        this._stateSnap = this._stateTo;
+      }
+    }
 
+    // ---- Idle breath (always on) ----------------------------------------
+    const tSec = (nowMs - this._startTimeMs) / 1000;
+    const breath = Math.sin(tSec * Math.PI * 2 * BREATH_HZ_1)
+                 + 0.5 * Math.sin(tSec * Math.PI * 2 * BREATH_HZ_2);
+    const breathNorm = breath * 0.5;  // into roughly [-0.75, 0.75]
+
+    // ---- Compose final uniforms: state-base + audio modulation ----------
+    const s = this._stateSnap;
+
+    // Density/glow/CA get audio pump (bot dominant, small mic nudge for asym).
+    const audioPump = bot;
+    this.uniforms.uDensity.value           = s.density + audioPump * 1.6;
+    this.uniforms.uAsymmetry.value         = clamp01(s.asymmetry + user * 0.25);
+    this.uniforms.uInternalAnim.value      = s.internalAnim * (1 + audioPump * 0.35);
+    this.atmosphereUniforms.uGlow.value    = s.glow + audioPump * 1.8;
+    this.caPass.uniforms.uAmount.value     = Math.min(0.05, s.ca + audioPump * 0.012);
+
+    // Color: state already encodes saturation/luminance. Push directly.
+    this.uniforms.uPrimaryColor.value.copy(s.primary);
+    this.uniforms.uSecondaryColor.value.copy(s.secondary);
+    this.atmosphereUniforms.uColor.value.copy(s.primary);
+
+    // Scale = state scale × (1 + breath) × (1 + audio pump).
+    const scale = s.scale
+                  * (1 + breathNorm * BREATH_AMP)
+                  * (1 + audioPump * 0.10);
+    this.orb.scale.setScalar(scale);
+
+    // Time + rotation integrate by delta (continuous, no smoothing needed).
+    this.uniforms.uTime.value += delta * s.speed;
+    this.orb.rotation.y += delta * s.rotation;
+    this.orb.rotation.x += delta * (s.rotation * 0.5);
+
+    // ---- Render ---------------------------------------------------------
     this.orb.updateMatrixWorld();
     const localCam = new THREE.Vector3().copy(this.camera.position);
     this.orb.worldToLocal(localCam);
