@@ -754,8 +754,11 @@
         }
       };
       pc.onconnectionstatechange = () => {
-        setStatus(pc.connectionState);
+        // Happy-path transitions (connecting → connected) are already
+        // covered by the transient "connected — speak" status set below.
+        // Only override the status for terminal bad states.
         if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+          setStatus(pc.connectionState);
           stop();
         }
       };
