@@ -23,6 +23,8 @@ dependencies = [
     "numpy",
     "pyyaml",
     "ddgs",
+    # Observability
+    "langfuse>=3.0",
 ]
 
 [project.optional-dependencies]

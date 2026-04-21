@@ -85,6 +85,16 @@ For deployed boxes, inject secrets via your secrets manager (Infisical, Vault, S
 | `MEMORY_MAX_MESSAGES` | `20` | Message-count trigger (user + assistant + tool). |
 | `MEMORY_TARGET_CONTEXT_TOKENS` | `MEMORY_MAX_CONTEXT_TOKENS / 2` | Compression target size. |
 
+## Tracing (Langfuse)
+
+When all three are set, each user turn becomes a trace. Unset → no-op. See [Tracing](/reference/tracing).
+
+| Variable | Default | Purpose |
+|:---|:---|:---|
+| `LANGFUSE_HOST` | — | Langfuse base URL (e.g. `http://ava:3000` on the protoLabs tailnet). |
+| `LANGFUSE_PUBLIC_KEY` | — | `pk-lf-…` from the Langfuse project. |
+| `LANGFUSE_SECRET_KEY` | — | `sk-lf-…` from the Langfuse project. |
+
 ## Config paths
 
 | Variable | Default | Purpose |

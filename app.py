@@ -98,6 +98,7 @@ from agent.filler import (
     tool_response_block,
     tool_use_block,
 )
+from agent import tracing as _tracing
 from agent.session_store import (
     drain_stashed_deliveries,
     load_last_summary,
@@ -152,6 +153,9 @@ _DELEGATES = DelegateRegistry(_DELEGATES_YAML)
 # A2A callback route can speak push-notified results when a session is
 # active. None when no one's connected.
 _ACTIVE_DELIVERY: DeliveryController | None = None
+# Active per-session Langfuse TurnTracer; exposed for non-pipeline code
+# (tools, delegate dispatch, etc.) to attach spans to the live trace.
+_ACTIVE_TRACER: object | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -528,13 +532,21 @@ async def run_bot(webrtc_connection) -> None:
         assistant_agg,
     ])
 
+    # Langfuse TurnTracer — owns the per-user-turn trace lifecycle. Noop
+    # observer if LANGFUSE_* isn't configured. Session id is regenerated
+    # per connect (future G9 multi-tenant work will key it on client).
+    import uuid as _uuid
+    turn_tracer = _tracing.make_turn_tracer(
+        session_id=_uuid.uuid4().hex,
+        user_id=None,  # multi-tenant work assigns per-client ids later
+    )
+
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True),
-        # Observer keeps the echo-guard state in sync with bot speaking
-        # frames. Observers see every frame at the pipeline level without
+        # Observers see every frame at the pipeline level without
         # being a transformation node.
-        observers=[EchoGuardObserver(_ECHO_STATE)],
+        observers=[EchoGuardObserver(_ECHO_STATE), turn_tracer],
     )
 
     # Wire the delivery + backchannel controllers' out-of-band emit paths
@@ -615,8 +627,10 @@ async def run_bot(webrtc_connection) -> None:
 
     @transport.event_handler("on_client_connected")
     async def _on_connect(_t, _c):
-        global _ACTIVE_DELIVERY
+        global _ACTIVE_DELIVERY, _ACTIVE_TRACER
         _ACTIVE_DELIVERY = delivery
+        _ACTIVE_TRACER = turn_tracer
+        _tracing.start_session(turn_tracer.session_id if hasattr(turn_tracer, "session_id") else "")
         _METRICS["sessions_total"] += 1
         _METRICS["sessions_active"] += 1
         logger.info("client connected")
@@ -631,7 +645,7 @@ async def run_bot(webrtc_connection) -> None:
 
     @transport.event_handler("on_client_disconnected")
     async def _on_disconnect(_t, _c):
-        global _ACTIVE_DELIVERY
+        global _ACTIVE_DELIVERY, _ACTIVE_TRACER
         logger.info("client disconnected")
         # Persist anything still pending so the next session can replay.
         snapshot = delivery.snapshot_pending()
@@ -639,6 +653,9 @@ async def run_bot(webrtc_connection) -> None:
             stash_delivery(skill.slug, item)
         if _ACTIVE_DELIVERY is delivery:
             _ACTIVE_DELIVERY = None
+        if _ACTIVE_TRACER is turn_tracer:
+            _ACTIVE_TRACER = None
+        _tracing.flush()
         _METRICS["sessions_active"] = max(0, _METRICS["sessions_active"] - 1)
         _cancel_progress()
         await task.cancel()
