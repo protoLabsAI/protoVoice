@@ -624,26 +624,21 @@ export class VoiceOrb {
   }
 
   _pulseAt(clientX, clientY) {
-    // Convert client → NDC → ray → first hit on the orb (world space) → local.
+    // Convert client → NDC → ray → first hit on the orb.
     this._ndc.set(
       (clientX / window.innerWidth) * 2 - 1,
       -(clientY / window.innerHeight) * 2 + 1,
     );
     this._raycaster.setFromCamera(this._ndc, this.camera);
     const hits = this._raycaster.intersectObject(this.orb, false);
-    let dir;
-    if (hits.length) {
-      const local = this.orb.worldToLocal(hits[0].point.clone());
-      dir = local.normalize();
-    } else {
-      // Fallback: use the ray direction into local space.
-      dir = this._raycaster.ray.direction.clone();
-      this.orb.worldToLocal(
-        this._raycaster.ray.origin.clone().add(dir.multiplyScalar(10))
-      );
-      dir.normalize();
+    if (!hits.length) {
+      // Cursor is off the orb — extinguish any ongoing bloom (including
+      // while held, where the decay loop is paused). No fallback spot.
+      this.uniforms.uClickStrength.value = 0;
+      return;
     }
-    this.uniforms.uClickDir.value.copy(dir);
+    const local = this.orb.worldToLocal(hits[0].point.clone()).normalize();
+    this.uniforms.uClickDir.value.copy(local);
     this.uniforms.uClickStrength.value = 1.0;
   }
 
