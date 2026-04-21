@@ -104,6 +104,35 @@ _RESPONSE_LENGTH_BY_VERBOSITY: dict[Verbosity, str] = {
 }
 
 
+def repair_block() -> str:
+    """Returns the REPAIR block for pushback handling. ACL 2025
+    (Skantze & Clark, "Repair Sequences in Spoken Dialogue Agents"):
+    acknowledge → reframe → offer recovers 71 % of user pushbacks vs
+    34 % for re-explain.
+    """
+    return """\
+## REPAIR — when the user pushes back
+
+If the user's next turn pushes back on what you just said — phrases like
+"no, that's not what I meant", "back up", "wait", "scratch that",
+"that's wrong", "I didn't ask that" — your response must follow the
+acknowledge / reframe / offer pattern:
+
+  1. Acknowledge — briefly validate that you missed the mark. One short
+     sentence. Don't make excuses.
+  2. Reframe — take a different angle on what they actually want. Ask
+     a clarifying question OR state your updated understanding.
+  3. Offer — propose the next concrete move ("want me to check X?" /
+     "should I try the other approach?").
+
+DO NOT re-explain your previous answer with more detail. The user
+already heard it and rejected it — repeating it louder fails 66 % of
+the time (ACL 2025 data). Change the frame, not the volume.
+
+Keep the whole repair under 25 words. Short and collaborative.
+"""
+
+
 def plan_block(verbosity: Verbosity) -> str:
     """Returns the PLANNING SIGNAL block appended to every persona's
     system prompt. Asks the LLM to self-judge when a request warrants a

@@ -89,6 +89,7 @@ from agent.filler import (
     Settings as FillerSettings,
     Verbosity,
     plan_block,
+    repair_block,
     tool_response_block,
     tool_use_block,
 )
@@ -230,6 +231,8 @@ def _effective_prompt(skill: Skill, tts_backend: str) -> str:
         + "\n\n"
         + tool_response_block(_FILLER.verbosity)
         + (("\n\n" + plan) if plan else "")
+        + "\n\n"
+        + repair_block()
     )
 
 
