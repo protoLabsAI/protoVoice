@@ -109,7 +109,13 @@ from agent.session_store import (
     save_summary,
     stash_delivery,
 )
-from agent.tools import ASYNC_TOOL_NAMES, latency_for, register_tools
+from agent.tools import (
+    ASYNC_TOOL_NAMES,
+    build_text_tool_schemas,
+    latency_for,
+    register_tools,
+    run_text_tool,
+)
 from skills.loader import load_skills, write_voice_clone_skill
 from skills.models import DEFAULT_SOUL_SLUG, Skill
 from voice import lifecycle
@@ -296,34 +302,96 @@ def _get_text_client() -> AsyncOpenAI:
     return _text_client
 
 
-async def text_agent(message: str, session_id: str) -> str:
-    """One-shot text turn — used by the A2A inbound handler.
+_TEXT_REACT_MAX_ITERATIONS = int(os.environ.get("TEXT_AGENT_MAX_ITER", "3"))
 
-    Keeps a small per-session history so multi-turn A2A conversations stay
-    coherent. No tool calls in this path (yet) — the voice side is where
-    tools live.
+
+async def text_agent(message: str, session_id: str) -> str:
+    """Text turn with a bounded ReAct loop — used by the A2A inbound
+    handler (both message/send and message/stream).
+
+    The text agent sees the same tool registry the voice side does
+    (calculator, datetime, web_search, delegate_to), minus async tools
+    like slow_research that need a live voice session to narrate back.
+    Loop is capped at TEXT_AGENT_MAX_ITER iterations (default 3) to
+    prevent runaway — on exhaustion we return whatever text the model
+    last produced (may be empty).
     """
+    import json as _json
+
     _METRICS["a2a_inbound_total"] += 1
     skill = _active_skill()
     history = _A2A_CONTEXTS.setdefault(session_id, [])
     history.append({"role": "user", "content": message})
-    # Text path uses the same voice-tuned prompt, including the TOOL USE /
-    # response / plan / repair blocks. Backend label selects the prosody
-    # hint; text consumers ignore tags so either value is safe.
-    messages = [
+
+    # System prompt shared with the voice path — blocks for TOOL USE,
+    # response shape, plan, repair all apply equally to a text reply.
+    messages: list[dict] = [
         {"role": "system", "content": _effective_prompt(skill, TTS_BACKEND)},
         *history[-(_A2A_MAX_TURNS * 2):],
     ]
-    r = await _get_text_client().chat.completions.create(
-        model=LLM_SERVED_NAME,
-        messages=messages,
-        max_tokens=skill.max_tokens,
-        temperature=skill.temperature,
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-    )
-    reply = (r.choices[0].message.content or "").strip()
+    tools_openai = build_text_tool_schemas(_DELEGATES)
+    client = _get_text_client()
+
+    reply = ""
+    for _ in range(max(1, _TEXT_REACT_MAX_ITERATIONS)):
+        kwargs: dict = {
+            "model": LLM_SERVED_NAME,
+            "messages": messages,
+            "max_tokens": skill.max_tokens,
+            "temperature": skill.temperature,
+            "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+        }
+        if tools_openai:
+            kwargs["tools"] = tools_openai
+            kwargs["tool_choice"] = "auto"
+        r = await client.chat.completions.create(**kwargs)
+        msg = r.choices[0].message
+        tool_calls = getattr(msg, "tool_calls", None) or []
+
+        if not tool_calls:
+            reply = (msg.content or "").strip()
+            break
+
+        # Carry the assistant turn (with tool_calls) + each tool result
+        # into the next iteration so the model sees the full trace.
+        messages.append({
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments or "{}",
+                    },
+                }
+                for tc in tool_calls
+            ],
+        })
+        for tc in tool_calls:
+            try:
+                args = _json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+            logger.info(f"[a2a/react] tool={tc.function.name} args={args!r}")
+            result = await run_text_tool(
+                tc.function.name,
+                args,
+                delegates=_DELEGATES,
+            )
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result,
+            })
+    else:
+        logger.warning(
+            f"[a2a/react] hit max iterations ({_TEXT_REACT_MAX_ITERATIONS}) — "
+            "returning last partial"
+        )
+
     history.append({"role": "assistant", "content": reply})
-    # Keep the per-session buffer bounded.
     if len(history) > _A2A_MAX_TURNS * 2:
         del history[: len(history) - _A2A_MAX_TURNS * 2]
     return reply

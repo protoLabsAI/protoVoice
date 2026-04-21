@@ -309,6 +309,60 @@ def _slow_research_handler(_controller: DeliveryController):
 # Registration
 # ---------------------------------------------------------------------------
 
+async def run_text_tool(
+    name: str,
+    arguments: dict,
+    *,
+    delegates: DelegateRegistry | None = None,
+    push_notification_url: str | None = None,
+    push_notification_token: str | None = None,
+) -> str:
+    """Invoke a tool handler in text mode (no pipecat FunctionCallParams).
+
+    Returns the string result the handler would have passed to
+    result_callback. Used by the inbound A2A ReAct loop (F6) so external
+    agents can drive the same tool registry the voice path uses.
+
+    Sync tools supported: calculator, get_datetime, web_search, delegate_to.
+    Async tool (slow_research) is NOT exposed here — it requires a live
+    DeliveryController + voice session to narrate back on completion.
+    """
+    class _P:  # duck-typed FunctionCallParams stand-in
+        def __init__(self, args: dict) -> None:
+            self.arguments = args
+            self._out: str = ""
+        async def result_callback(self, text: Any) -> None:
+            self._out = "" if text is None else str(text)
+    params = _P(arguments)
+    if name == "calculator":
+        await calculator_handler(params)
+    elif name == "get_datetime":
+        await datetime_handler(params)
+    elif name == "web_search":
+        await web_search_handler(params)
+    elif name == "delegate_to" and delegates is not None:
+        handler = _delegate_to_handler(
+            delegates,
+            delivery=None,                      # no voice session; skip progress
+            push_notification_url=push_notification_url,
+            push_notification_token=push_notification_token,
+        )
+        await handler(params)
+    else:
+        return f"(unknown or unavailable tool: {name})"
+    return params._out
+
+
+def build_text_tool_schemas(delegates: DelegateRegistry | None = None) -> list[dict]:
+    """Build the OpenAI tools-parameter list for the text-mode ReAct
+    loop. Mirrors the schemas register_tools registers with pipecat,
+    minus slow_research (async — see run_text_tool)."""
+    schemas = [CALCULATOR_SCHEMA, DATETIME_SCHEMA, WEB_SEARCH_SCHEMA]
+    if delegates is not None and delegates.names():
+        schemas.append(_delegate_to_schema(delegates))
+    return [{"type": "function", "function": s.to_default_dict()} for s in schemas]
+
+
 def register_tools(
     llm: LLMService,
     *,
