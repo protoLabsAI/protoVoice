@@ -89,6 +89,19 @@ class _Pending:
 # Keeps the filler from stepping on the tail of the user's utterance.
 _SILENCE_SETTLE_SECS = 0.6
 
+# Beyond this many pending items, low-priority stale ones get dropped so
+# the drain doesn't turn into a monologue. ProMemAssist (UIST '25)
+# backpressure-by-discard pattern.
+_MAX_PENDING_AT_DRAIN = 3
+
+# Priority rank (higher = more important) for drop ordering.
+_PRIORITY_RANK: dict[Priority, int] = {
+    Priority.CRITICAL: 4,
+    Priority.TIME_SENSITIVE: 3,
+    Priority.ACTIVE: 2,
+    Priority.PASSIVE: 1,
+}
+
 
 class DeliveryController(FrameProcessor):
     """Tracks VAD state + user transcripts, drains pending deliveries."""
@@ -167,6 +180,7 @@ class DeliveryController(FrameProcessor):
 
     async def _drain_eligible(self, *, new_transcript: str | None) -> None:
         """Pop + emit any pending entries whose policy conditions are met."""
+        self._prune_overflow()
         remaining: list[_Pending] = []
         for item in self._pending:
             if item.policy is DeliveryPolicy.NEXT_SILENCE:
@@ -200,6 +214,42 @@ class DeliveryController(FrameProcessor):
             await self._drain_eligible(new_transcript=frame.text)
 
         await self.push_frame(frame, direction)
+
+    def _prune_overflow(self) -> None:
+        """Before draining, drop low-priority stale items if we have more
+        than _MAX_PENDING_AT_DRAIN pending. Keeps the post-silence drain
+        from turning into a monologue when the queue has piled up.
+
+        Sort key: priority rank DESC (critical first), then recency DESC
+        (newest first). Keep top-k; drop the tail. CRITICAL and
+        TIME_SENSITIVE items are never dropped regardless of count —
+        they're the ones the user actively needs to hear.
+        """
+        if len(self._pending) <= _MAX_PENDING_AT_DRAIN:
+            return
+
+        def sort_key(p: _Pending) -> tuple[int, float]:
+            return (_PRIORITY_RANK.get(p.priority, 0), p.enqueued_at)
+
+        sorted_items = sorted(self._pending, key=sort_key, reverse=True)
+        keep: list[_Pending] = []
+        dropped: list[_Pending] = []
+        for item in sorted_items:
+            if len(keep) < _MAX_PENDING_AT_DRAIN:
+                keep.append(item)
+            elif _PRIORITY_RANK.get(item.priority, 0) >= _PRIORITY_RANK[Priority.TIME_SENSITIVE]:
+                keep.append(item)  # always keep important ones
+            else:
+                dropped.append(item)
+
+        if dropped:
+            logger.info(
+                f"[delivery] prune dropped {len(dropped)} low-priority item(s): "
+                + ", ".join(f"{d.priority.value}:{d.phrase[:40]!r}" for d in dropped)
+            )
+        # Preserve original enqueue order among kept items (not sort order).
+        kept_ids = {id(k) for k in keep}
+        self._pending = [p for p in self._pending if id(p) in kept_ids]
 
     async def _settle_then_drain(self) -> None:
         try:

@@ -79,8 +79,15 @@ The agent should:
 
 Tune the sleep with `SLOW_RESEARCH_SECS`.
 
+## Backpressure (overflow pruning)
+
+If the pending queue grows past **3 items** at drain time, the controller drops low-priority stale ones before draining — keeps a long silence from turning into a monologue when results have piled up.
+
+Sort: priority rank DESC (critical first), then recency DESC (newest first). Keep top-3, plus any `critical` / `time_sensitive` beyond that. The latter two priorities are never dropped regardless of count — they're the ones the user actively needs to hear.
+
+Pattern borrowed from [ProMemAssist](https://arxiv.org/pdf/2507.21378) (UIST '25) which validated utility-gated discard over summarization for voice queues.
+
 ## Known edge cases
 
-- **Two overlapping async results.** Both queue; both get drained at the next silence. They play back-to-back. Not ideal; no interleaving or summarization yet.
 - **User mutes their own mic.** VAD never sees user-stopped, so `next_silence` never fires. Fallback timer (planned): deliver after 10 s regardless.
 - **`when_asked` that never matches.** The result sits forever. No TTL yet; results accumulate. Planned: expire after N minutes.
