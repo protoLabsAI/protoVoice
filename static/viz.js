@@ -162,7 +162,11 @@ const fragmentShader = /* glsl */ `
     rayOrig.xz *= rotXZ;
     rayDir.xz *= rotXZ;
     vec2 limits = getVolumeBounds(rayOrig, rayDir, 2.0);
-    if (limits.x < 0.0) discard;
+    // When camera is inside the sphere, the near-intersection sits behind
+    // us (limits.x < 0). Clamp start to camera origin (0) so the ray marches
+    // from the camera outward to the far side, not from behind.
+    limits.x = max(limits.x, 0.0);
+    if (limits.y < 0.0) discard;  // sphere entirely behind the camera (impossible here but safe)
     vec3 volumeColor = traceEnergy(rayOrig, rayDir, limits);
     vec3 normal = normalize(vNormal);
     vec3 viewDir = normalize(vViewPosition);
@@ -514,6 +518,10 @@ export class VoiceOrb {
     this._dragMoved = 0;              // px of movement since pointerdown
     this._lastPointer = { x: 0, y: 0, t: 0 };
     this._dragVel = { x: 0, y: 0 };   // radians per second, decays when idle
+
+    // Zoom — scroll wheel moves the camera along its z axis. Smoothed via
+    // lerp each frame toward _zoomTarget so a single flick feels inertial.
+    this._zoomTarget = this.camera.position.z;
     this._attachPointerHandlers();
 
     this._startTimeMs = performance.now();
@@ -588,13 +596,26 @@ export class VoiceOrb {
     dom.addEventListener('pointermove', move);
     dom.addEventListener('pointerup', up);
     dom.addEventListener('pointercancel', up);
+
+    // Scroll wheel → zoom. Positive deltaY = wheel down = zoom out.
+    // Sensitivity scales with current distance so the feel stays consistent
+    // regardless of how far out you are. Clamp [6, 20]: 6 is the preset
+    // resting distance (= max zoomed in, biggest orb); 20 shrinks the orb
+    // well down toward a small pip in the viewport.
+    const wheel = (e) => {
+      e.preventDefault();
+      const step = e.deltaY * 0.001 * Math.max(0.5, this._zoomTarget);
+      this._zoomTarget = Math.max(6, Math.min(20, this._zoomTarget + step));
+    };
+    dom.addEventListener('wheel', wheel, { passive: false });
+
     // Window blur / visibility change — any path that takes focus away
     // mid-drag (alt-tab, devtools focus, OS-level interrupts) should drop
     // the drag rather than leave it captured.
     const onBlur = () => releaseDrag();
     window.addEventListener('blur', onBlur);
     document.addEventListener('visibilitychange', onBlur);
-    this._pointerHandlers = { dom, down, move, up, onBlur };
+    this._pointerHandlers = { dom, down, move, up, wheel, onBlur };
   }
 
   _pulseAt(clientX, clientY) {
@@ -710,11 +731,12 @@ export class VoiceOrb {
     this._running = false;
     window.removeEventListener('resize', this._onResize);
     if (this._pointerHandlers) {
-      const { dom, down, move, up, onBlur } = this._pointerHandlers;
+      const { dom, down, move, up, wheel, onBlur } = this._pointerHandlers;
       dom.removeEventListener('pointerdown', down);
       dom.removeEventListener('pointermove', move);
       dom.removeEventListener('pointerup', up);
       dom.removeEventListener('pointercancel', up);
+      dom.removeEventListener('wheel', wheel);
       window.removeEventListener('blur', onBlur);
       document.removeEventListener('visibilitychange', onBlur);
     }
@@ -877,6 +899,10 @@ export class VoiceOrb {
         this.uniforms.uClickStrength.value = 0;
       }
     }
+
+    // Ease camera toward the zoom target. 0.15 per frame gives a ~300 ms
+    // feel — the flick is responsive but not jumpy.
+    this.camera.position.z = lerp(this.camera.position.z, this._zoomTarget, 0.15);
 
     // ---- Render ---------------------------------------------------------
     this.orb.updateMatrixWorld();
