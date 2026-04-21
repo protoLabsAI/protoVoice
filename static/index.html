@@ -311,13 +311,17 @@
     #status-float:empty { opacity: 0; }
 
     #idle-hint {
-      position: fixed; top: 50%; left: 50%;
-      transform: translate(-50%, calc(-50% + 11rem));
-      z-index: 12; font-size: 0.75rem;
-      color: var(--fg-subtle);
-      letter-spacing: 0.04em; text-transform: lowercase;
+      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+      z-index: 14;
+      padding: 0.35rem 0.8rem;
+      background: var(--bg-1);
+      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+      border: 1px solid var(--border-strong);
+      border-radius: 9999px;
+      font-size: 0.75rem; color: var(--fg-muted);
+      letter-spacing: 0.02em;
       pointer-events: none; opacity: 0;
-      transition: opacity 400ms;
+      transition: opacity 400ms ease;
     }
     #idle-hint.show { opacity: 1; }
   </style>
