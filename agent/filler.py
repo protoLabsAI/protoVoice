@@ -157,8 +157,13 @@ _BACKCHANNEL_STYLE = (
 @dataclass
 class Settings:
     verbosity: Verbosity = DEFAULT_VERBOSITY
-    progress_after_secs: float = 3.0
-    progress_interval_secs: float = 4.0
+    # Two-tier progress cadence (Alexa pattern + arXiv 2507.22352 data):
+    # first ack around ~2 s so the user knows we're still here; second
+    # ~6 s later so a long tool doesn't feel broken; then silence. Research
+    # shows >4 s unfilled silence degrades QoE, but over-narrating past
+    # ~8 s reads as performative.
+    progress_first_secs: float = 2.0
+    progress_second_secs: float = 6.0
     recency_window: int = 6
     max_gen_tokens: int = 30
     temperature: float = 0.9

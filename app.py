@@ -475,9 +475,15 @@ async def run_bot(webrtc_connection) -> None:
         return None
 
     async def _progress_loop(tool_name: str):
+        """Two-tier cadence: ~2 s first ack, ~6 s later second ack, then
+        silence. Over-narrating past ~8 s starts feeling performative.
+        Cancelled on tool completion or barge-in via `_cancel_progress`."""
         try:
-            await asyncio.sleep(_FILLER.progress_after_secs)
-            while True:
+            for sleep_secs in (
+                _FILLER.progress_first_secs,
+                _FILLER.progress_second_secs,
+            ):
+                await asyncio.sleep(sleep_secs)
                 try:
                     phrase = await _FILLER_GEN.progress(
                         tool_name=tool_name,
@@ -492,7 +498,6 @@ async def run_bot(webrtc_connection) -> None:
                     await task.queue_frame(
                         TTSSpeakFrame(phrase, append_to_context=False)
                     )
-                await asyncio.sleep(_FILLER.progress_interval_secs)
         except asyncio.CancelledError:
             pass
 

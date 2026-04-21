@@ -65,12 +65,12 @@ The active skill's `tts_backend` decides which style hint gets injected. So a Fi
 
 ## Tuning progress cadence (SLOW tools)
 
-Two settings in `agent/filler.Settings`:
+Two-tier cadence matching Alexa's production pattern + the [arXiv 2507.22352](https://arxiv.org/pdf/2507.22352) finding that >4 s of unfilled silence degrades perceived QoE:
 
-- `progress_after_secs` — wait this long after the tool starts before the first progress line. Default 3.0 s.
-- `progress_interval_secs` — interval between subsequent progress lines. Default 4.0 s.
+- `progress_first_secs` — wait this long after the tool starts before the first "still working" line. Default **2.0 s**.
+- `progress_second_secs` — wait this long again before emitting a second ack (~8 s total wall-clock). Default **6.0 s**.
 
-A SLOW tool that finishes inside `progress_after_secs` only gets the inline preamble — no progress chorus.
+After the second ack the loop stops — narrating past ~8 s reads as performative. A SLOW tool that finishes inside `progress_first_secs` only gets the LLM's inline preamble, no progress narration.
 
 ## Persona override
 

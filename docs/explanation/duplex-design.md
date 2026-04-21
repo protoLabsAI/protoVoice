@@ -12,7 +12,7 @@ Mechanism:
 
 1. LLM emits a tool call. Pipecat fires `on_function_calls_started`.
 2. Our handler queues `TTSSpeakFrame(<opening_phrase>)` on the pipeline task. This is a special frame that Pipecat synthesizes and plays *immediately*, independent of the current LLM turn.
-3. A background `_progress_loop()` coroutine sleeps `progress_after_secs` and then queues `TTSSpeakFrame(<progress_phrase>)` every `progress_interval_secs` until the tool returns.
+3. A background `_progress_loop()` coroutine fires a **two-tier cadence** (Alexa pattern): first ack after `progress_first_secs` (~2 s), second ack after an additional `progress_second_secs` (~6 s). Then stops — over-narrating past ~8 s reads as performative. Cancelled on tool completion or barge-in.
 4. The tool handler is wrapped: on return (success or failure) it cancels the progress loop.
 
 The opening phrase is gated on verbosity. `silent` emits nothing. `brief` emits a short filler. `narrated` and `chatty` emit progressively more.
