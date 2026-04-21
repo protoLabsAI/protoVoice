@@ -28,7 +28,17 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 
-from openai import AsyncOpenAI
+# Prefer langfuse.openai when Langfuse is configured — it transparently
+# captures each chat.completions call as a generation span under the
+# currently-active trace. Falls through to the stock openai client when
+# Langfuse isn't installed / configured, so local dev is unaffected.
+try:
+    if all(os.environ.get(k) for k in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")):
+        from langfuse.openai import AsyncOpenAI  # type: ignore[import-not-found]
+    else:
+        from openai import AsyncOpenAI
+except Exception:  # pragma: no cover — catch any langfuse import wobble
+    from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 

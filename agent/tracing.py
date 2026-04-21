@@ -149,18 +149,24 @@ def continue_trace(
 def _frame_types():
     from pipecat.frames.frames import (
         BotStoppedSpeakingFrame,
+        FunctionCallCancelFrame,
+        FunctionCallInProgressFrame,
+        FunctionCallResultFrame,
         LLMFullResponseEndFrame,
         LLMFullResponseStartFrame,
         TranscriptionFrame,
         UserStoppedSpeakingFrame,
     )
-    return (
-        UserStoppedSpeakingFrame,
-        BotStoppedSpeakingFrame,
-        TranscriptionFrame,
-        LLMFullResponseStartFrame,
-        LLMFullResponseEndFrame,
-    )
+    return {
+        "UserStoppedSpeakingFrame": UserStoppedSpeakingFrame,
+        "BotStoppedSpeakingFrame": BotStoppedSpeakingFrame,
+        "TranscriptionFrame": TranscriptionFrame,
+        "LLMFullResponseStartFrame": LLMFullResponseStartFrame,
+        "LLMFullResponseEndFrame": LLMFullResponseEndFrame,
+        "FunctionCallInProgressFrame": FunctionCallInProgressFrame,
+        "FunctionCallResultFrame": FunctionCallResultFrame,
+        "FunctionCallCancelFrame": FunctionCallCancelFrame,
+    }
 
 
 class TurnTracer:
@@ -186,28 +192,24 @@ class TurnTracer:
         self._last_transcript: str | None = None
         self._llm_response_closed = False
         self._bot_stopped = False
+        # Span handles — keyed so we can close them on matching frames.
+        self._llm_span: Any = None
+        self._tool_spans: dict[str, Any] = {}  # tool_call_id → span
 
     def get_current_trace(self) -> Any:
         """Other code pulls this to add spans under the active turn."""
         return self._current_trace or _NULL
 
     async def on_push_frame(self, data: Any) -> None:
-        (
-            UserStoppedSpeakingFrame,
-            BotStoppedSpeakingFrame,
-            TranscriptionFrame,
-            LLMFullResponseStartFrame,
-            LLMFullResponseEndFrame,
-        ) = _frame_types()
-
+        F = _frame_types()
         frame = data.frame
 
         # Capture the latest transcript so the trace's input field carries
         # the user's actual message, not a placeholder.
-        if isinstance(frame, TranscriptionFrame) and getattr(frame, "text", None):
+        if isinstance(frame, F["TranscriptionFrame"]) and getattr(frame, "text", None):
             self._last_transcript = frame.text
 
-        if isinstance(frame, UserStoppedSpeakingFrame):
+        if isinstance(frame, F["UserStoppedSpeakingFrame"]):
             if self._current_trace is None:
                 self._current_trace = start_turn_trace(
                     session_id=self.session_id,
@@ -218,11 +220,58 @@ class TurnTracer:
                 self._llm_response_closed = False
                 self._bot_stopped = False
 
-        elif isinstance(frame, LLMFullResponseEndFrame):
+        elif isinstance(frame, F["LLMFullResponseStartFrame"]):
+            if self._current_trace is not None and self._llm_span is None:
+                try:
+                    self._llm_span = self._current_trace.span(
+                        name="llm.response",
+                        input=self._last_transcript,
+                    )
+                except Exception as e:
+                    logger.warning(f"[tracing] llm span open failed: {e}")
+
+        elif isinstance(frame, F["LLMFullResponseEndFrame"]):
+            if self._llm_span is not None:
+                try:
+                    self._llm_span.end()
+                except Exception as e:
+                    logger.warning(f"[tracing] llm span end failed: {e}")
+                self._llm_span = None
             self._llm_response_closed = True
             self._maybe_close_trace()
 
-        elif isinstance(frame, BotStoppedSpeakingFrame):
+        elif isinstance(frame, F["FunctionCallInProgressFrame"]):
+            call_id = getattr(frame, "tool_call_id", None) or getattr(frame, "id", "")
+            name = getattr(frame, "function_name", None) or getattr(frame, "name", "tool")
+            if call_id and self._current_trace is not None:
+                try:
+                    self._tool_spans[call_id] = self._current_trace.span(
+                        name=f"tool.{name}",
+                        input={"name": name, "args_preview": _preview(getattr(frame, "arguments", None))},
+                    )
+                except Exception as e:
+                    logger.warning(f"[tracing] tool span open failed: {e}")
+
+        elif isinstance(frame, F["FunctionCallResultFrame"]):
+            call_id = getattr(frame, "tool_call_id", None) or getattr(frame, "id", "")
+            span = self._tool_spans.pop(call_id, None)
+            if span is not None:
+                try:
+                    span.end(output=_preview(getattr(frame, "result", None)))
+                except Exception as e:
+                    logger.warning(f"[tracing] tool span end failed: {e}")
+
+        elif isinstance(frame, F["FunctionCallCancelFrame"]):
+            call_id = getattr(frame, "tool_call_id", None) or getattr(frame, "id", "")
+            span = self._tool_spans.pop(call_id, None)
+            if span is not None:
+                try:
+                    span.update(level="WARNING", status_message="cancelled")
+                    span.end()
+                except Exception as e:
+                    logger.warning(f"[tracing] tool span cancel failed: {e}")
+
+        elif isinstance(frame, F["BotStoppedSpeakingFrame"]):
             self._bot_stopped = True
             self._maybe_close_trace()
 
@@ -238,9 +287,26 @@ class TurnTracer:
             self._current_trace.end()
         except Exception as e:
             logger.warning(f"[tracing] trace.end() failed: {e}")
+        # Clear any leftover tool spans — tool handler forgot to close.
+        for sp in self._tool_spans.values():
+            try: sp.end()
+            except Exception: pass
+        self._tool_spans.clear()
         self._current_trace = None
+        self._llm_span = None
         self._llm_response_closed = False
         self._bot_stopped = False
+
+
+def _preview(value: Any, max_len: int = 500) -> Any:
+    """Abbreviate a value for span metadata so Langfuse payloads stay lean."""
+    if value is None:
+        return None
+    try:
+        s = str(value)
+    except Exception:
+        return "<unrenderable>"
+    return s if len(s) <= max_len else s[:max_len] + "…"
 
 
 def make_turn_tracer(session_id: str, user_id: str | None = None) -> Any:
