@@ -80,8 +80,10 @@ For deployed boxes, inject secrets via your secrets manager (Infisical, Vault, S
 
 | Variable | Default | Purpose |
 |:---|:---|:---|
-| `MEMORY_MAX_MESSAGES` | `20` | Prune threshold (user + assistant + tool messages) |
-| `MEMORY_SUMMARIZE` | `1` | Run LLM summarization on prune overflow. Set `0` to drop silently. |
+| `MEMORY_SUMMARIZE` | `1` | Master switch for pipecat's built-in auto-summarizer. Set `0` to disable. |
+| `MEMORY_MAX_CONTEXT_TOKENS` | `8000` | Token-based trigger for summarization (~4 chars/token). |
+| `MEMORY_MAX_MESSAGES` | `20` | Message-count trigger (user + assistant + tool). |
+| `MEMORY_TARGET_CONTEXT_TOKENS` | `MEMORY_MAX_CONTEXT_TOKENS / 2` | Compression target size. |
 
 ## Config paths
 

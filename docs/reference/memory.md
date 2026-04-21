@@ -1,54 +1,50 @@
 # Memory
 
-Per-session memory is a **sliding window with background summarization**. It prevents the LLM context from growing unboundedly while preserving the gist of older turns.
+Per-session memory is a **token-budgeted sliding window with LLM summarization**, powered by pipecat's built-in `LLMContextSummarizer`. It prevents the LLM context from growing unboundedly while preserving the gist of older turns.
 
 ## How it works
 
-1. `MemoryManager` sits at the tail of the pipeline. It watches for `LLMFullResponseEndFrame` (end of each assistant turn).
-2. At turn end, it counts user/assistant/tool messages (system messages are pinned — never evicted).
-3. If the count exceeds `MEMORY_MAX_MESSAGES` (default 20), it trims down to half the cap. The trimmed block becomes the summary input.
-4. If `MEMORY_SUMMARIZE=1` (default), a background `asyncio` task calls the same LLM service with a "summarize in 2-3 sentences" prompt.
-5. On success, the summary is inserted (or updated, if one already exists) as a system message right after the persona's SOUL prompt:
+`LLMContextSummarizer` is wired into the assistant aggregator, not a separate pipeline processor. It watches every assistant turn and triggers a summarization pass when either threshold is crossed:
 
-   ```
-   system: <skill system prompt — SOUL.md>
-   system: Previous conversation summary: <rolling summary>
-   user:   <recent turns>
-   ...
-   ```
+- **Token limit** (`MEMORY_MAX_CONTEXT_TOKENS`, default 8000) — approximate, 4 chars/token.
+- **Message count** (`MEMORY_MAX_MESSAGES`, default 20) — number of unsummarized user + assistant turns since the last compression.
+
+When triggered, the summarizer asks the same LLM that drives the conversation to compress the oldest turns into a summary, keeping the most recent messages untouched. The summary lands as a system message in the context, so the agent "remembers" the gist. Summary emits a `SummaryAppliedEvent` observable via the aggregator's `on_summary_applied` handler.
 
 ## Tunables
 
 | Variable | Default | Purpose |
 |:---|:---|:---|
-| `MEMORY_MAX_MESSAGES` | `20` | Prune threshold. Counts user/assistant/tool; system messages don't count. |
-| `MEMORY_SUMMARIZE` | `1` | Set `0` to drop overflow silently with no summary |
+| `MEMORY_SUMMARIZE` | `1` | Set `0` to disable auto-summarization entirely. |
+| `MEMORY_MAX_CONTEXT_TOKENS` | `8000` | Token-based trigger threshold. |
+| `MEMORY_MAX_MESSAGES` | `20` | Message-count trigger threshold (user + assistant + tool). |
+| `MEMORY_TARGET_CONTEXT_TOKENS` | `MEMORY_MAX_CONTEXT_TOKENS / 2` | What the summarizer tries to compress down to. Lower = more aggressive. |
 
-`MEMORY_MAX_MESSAGES` of 20 = 10 turns (user + assistant per turn). Adjust up for longer-horizon conversations at the cost of slower TTFB.
+Either threshold alone fires a summary — use whichever shape matters for your deployment. Long-horizon coaching sessions benefit from token gating; short task-oriented sessions rarely hit it and only trip the message cap.
 
 ## Failure modes
 
-- **Summary call times out or errors** — logged as a warning, overflow messages are dropped without a summary. Conversation continues.
-- **Multiple prunes stacking** — `_summarizing` flag guards against concurrent summary jobs. If a second prune fires while the first's summary is in flight, the overflow is trimmed but not summarized (the older summary will cover it).
-- **Summary is wrong / hallucinates** — you'll hear it on the next tool-less turn as the agent misremembers. Prompt the summarizer tighter, or set `MEMORY_SUMMARIZE=0` to skip.
+- **Summary call errors or times out** — the summarizer logs the failure and leaves the context alone; the next trigger retries.
+- **Multiple triggers stacking** — pipecat's summarizer has an internal in-progress guard (`_summarization_in_progress`); subsequent triggers are no-ops until the first completes.
+- **Summary is wrong / hallucinates** — you'll hear it on the next tool-less turn. Tune `MEMORY_TARGET_CONTEXT_TOKENS` lower (more aggressive) or turn it off with `MEMORY_SUMMARIZE=0`.
 
 ## Intentional non-features
 
-- **No persistence.** Memory lives in the session's LLMContext. Close the tab, memory's gone. Persistence across sessions (Graphiti or similar) is a potential later milestone — the design explicitly avoids the complexity for now.
-- **No semantic recall.** No vector search, no embedding. Just a rolling summary + recent window. This is fine for ~15-minute voice sessions.
-- **No per-user memory.** Module-level singleton pipeline ties memory to the connection. Multi-tenant will refactor this.
+- **No persistence across sessions** (yet — `C14` in the roadmap adds reconnect replay).
+- **No semantic recall.** No vector search. Just a rolling summary + recent window.
+- **No per-user memory.** Module-level singleton pipeline ties memory to the connection. Multi-tenant would refactor this.
 
 ## Observing it
 
-Watch the server log for:
+Pipecat logs summarization events under the `LLMContextSummarizer` logger. Watch for:
 
 ```
-[memory] pruning 10 oldest message(s) (keeping 10 recent)
-[memory] summary inserted (187 chars)
+[ContextSummarizer] triggered — 24 messages, ~9200 tokens → summarizing
+[ContextSummarizer] summary applied — 14 messages compressed, 6 preserved
 ```
 
 Tail with:
 
 ```bash
-docker logs -f protovoice | grep memory
+docker logs -f protovoice | grep ContextSummarizer
 ```

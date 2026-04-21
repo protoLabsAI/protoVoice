@@ -6,22 +6,29 @@ The full Pipecat pipeline as it exists in `app.py::run_bot`.
 
 ```python
 Pipeline([
-    transport.input(),     # SmallWebRTCInputTransport — mic RTP → AudioRawFrame
-    stt,                   # LocalWhisperSTT — HF Whisper large-v3-turbo
-    user_agg,              # LLMUserAggregator — VAD turn-taking + context build
-    backchannel,           # BackchannelController — "mm-hmm" during long user turns (M9)
-    delivery,              # DeliveryController — drains push-results (M3+)
-    llm,                   # OpenAILLMService — vLLM / external
-    tts,                   # FishAudioTTS or LocalKokoroTTS
-    transport.output(),    # SmallWebRTCOutputTransport — TTS → RTP → speaker
-    assistant_agg,         # LLMAssistantAggregator — records agent turns into context
-    memory,                # MemoryManager — sliding window + summary (M5)
+    transport.input(),          # SmallWebRTCInputTransport — mic RTP → AudioRawFrame
+    EchoGuardSuppressor(...),   # drops mic audio while bot speaks + 300ms tail
+    stt,                        # LocalWhisperSTT — HF Whisper large-v3-turbo
+    user_agg,                   # LLMUserAggregator — VAD turn-taking + context build
+    BargeInGate(),              # adaptive barge-in: grace window on VAD-fired interrupts
+    MicroAckInjector(...),      # "mm" after 500ms if pipeline is slow (Vapi pattern)
+    backchannel,                # BackchannelController — "mm-hmm" during long user turns
+    delivery,                   # DeliveryController — priority-routed push deliveries
+    llm,                        # OpenAILLMService — vLLM / external
+    tts,                        # FishAudioTTS or LocalKokoroTTS / OpenAI
+    transport.output(),         # SmallWebRTCOutputTransport — TTS → RTP → speaker
+    ProsodyTagStripper(),       # cleans Fish tags out of LLM history
+    assistant_agg,              # LLMAssistantAggregator + built-in LLMContextSummarizer
 ])
 ```
 
+- **EchoGuardSuppressor** drops mic audio while the bot is speaking + `ECHO_GUARD_MS` tail so VAD never sees it. See [Audio Handling](/guides/audio-handling).
+- **BargeInGate** buffers VAD-fired interrupts during bot speech for a ~350 ms grace window; swallows coughs / backchannels, flushes real interrupts.
+- **MicroAckInjector** fires a quiet "mm" / "hm" if the main pipeline hasn't produced bot audio within ~500 ms of UserStoppedSpeaking. Cancels on BotStartedSpeaking.
 - **BackchannelController** watches `UserStartedSpeakingFrame` / `UserStoppedSpeakingFrame` to fire brief listener-acks during long user utterances. See [Backchannels](/guides/backchannels).
 - **DeliveryController** watches the same VAD frames + `TranscriptionFrame` to decide when to drain queued push results. See [Delivery Policies](/guides/delivery-policies).
-- **MemoryManager** watches `LLMFullResponseEndFrame` for turn boundaries and triggers async pruning + summarization. See [Memory](/reference/memory).
+- **ProsodyTagStripper** removes Fish-style prosody tags (`[softly]`, `[pause:300]`) from TextFrames before they reach LLM context. Non-Fish TTS services strip at the adapter level via `text_filters=` kwarg.
+- **assistant_agg** has pipecat's `LLMContextSummarizer` baked in; it auto-compresses old turns once token or message thresholds fire. See [Memory](/reference/memory).
 
 ## Pre-tool acknowledgements
 

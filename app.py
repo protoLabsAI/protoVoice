@@ -56,8 +56,13 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
+    LLMAssistantAggregatorParams,
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
+)
+from pipecat.utils.context.llm_context_summarization import (
+    LLMAutoContextSummarizationConfig,
+    LLMContextSummaryConfig,
 )
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import TransportParams
@@ -94,7 +99,6 @@ from agent.filler import (
     tool_use_block,
 )
 from agent.tools import ASYNC_TOOL_NAMES, latency_for, register_tools
-from memory.window import MemoryManager
 from skills.loader import load_skills, write_voice_clone_skill
 from skills.models import DEFAULT_SOUL_SLUG, Skill
 from voice import lifecycle
@@ -407,16 +411,32 @@ async def run_bot(webrtc_connection) -> None:
         tools=tools_schema,
     )
 
-    memory = MemoryManager(context, summarizer_llm=llm)
     _turn_strategies = _build_user_turn_strategies()
     _user_agg_kwargs: dict = {"vad_analyzer": SileroVADAnalyzer()}
     if _turn_strategies is not None:
         # Only pass user_turn_strategies when we actually built one — passing
         # None keeps the default (naive VAD endpointing).
         _user_agg_kwargs["user_turn_strategies"] = _turn_strategies
+
+    # Pipecat's built-in LLMContextSummarizer lives inside the assistant
+    # aggregator. It auto-compresses once token/message thresholds hit;
+    # emits SummaryAppliedEvent when done. Thresholds map cleanly onto
+    # the env vars we used to read in the retired memory/window.py.
+    _summary_max_tokens = int(os.environ.get("MEMORY_MAX_CONTEXT_TOKENS", "8000"))
+    _summary_max_messages = int(os.environ.get("MEMORY_MAX_MESSAGES", "20"))
+    _summary_target_tokens = int(os.environ.get("MEMORY_TARGET_CONTEXT_TOKENS", str(_summary_max_tokens // 2)))
+    _summary_config = LLMAutoContextSummarizationConfig(
+        max_context_tokens=_summary_max_tokens,
+        max_unsummarized_messages=_summary_max_messages,
+        summary_config=LLMContextSummaryConfig(target_context_tokens=_summary_target_tokens),
+    )
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(**_user_agg_kwargs),
+        assistant_params=LLMAssistantAggregatorParams(
+            enable_auto_context_summarization=os.environ.get("MEMORY_SUMMARIZE", "1") == "1",
+            auto_context_summarization_config=_summary_config,
+        ),
     )
 
     pipeline = Pipeline([
@@ -452,10 +472,9 @@ async def run_bot(webrtc_connection) -> None:
         # context for future turns. Applies regardless of backend — safety
         # net for whatever the LLM emitted.
         ProsodyTagStripper(),
+        # Context summarization is wired INTO assistant_agg itself via
+        # LLMAssistantAggregatorParams — no separate pipeline processor.
         assistant_agg,
-        # Memory sits at the tail so it observes LLMFullResponseEndFrame on
-        # each turn and prunes/summarizes asynchronously without blocking.
-        memory,
     ])
 
     task = PipelineTask(

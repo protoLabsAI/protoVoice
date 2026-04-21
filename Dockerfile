@@ -34,7 +34,6 @@ COPY app.py ./
 COPY a2a/ ./a2a/
 COPY agent/ ./agent/
 COPY config/ ./config/
-COPY memory/ ./memory/
 COPY skills/ ./skills/
 COPY static/ ./static/
 COPY voice/ ./voice/
