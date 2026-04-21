@@ -102,6 +102,22 @@ _PRIORITY_RANK: dict[Priority, int] = {
     Priority.PASSIVE: 1,
 }
 
+# When 2+ NEXT_SILENCE items would drain together, ask the user first
+# instead of flushing. CHI '24 ("Better to Ask Than Assume", Zhang et al.):
+# users strongly prefer proactive-VAs that announce availability to ones
+# that barge in with multiple results back-to-back.
+_BID_THRESHOLD = 2
+
+# Affirmative / negative responses to the bid. Naive substring match.
+_BID_YES = (
+    "yes", "yeah", "yep", "sure", "okay", "ok", "please",
+    "go ahead", "hear them", "what are they", "tell me", "what",
+)
+_BID_NO = (
+    "no", "nope", "not now", "skip", "later", "never mind", "nevermind",
+    "drop it", "forget it",
+)
+
 
 class DeliveryController(FrameProcessor):
     """Tracks VAD state + user transcripts, drains pending deliveries."""
@@ -111,6 +127,10 @@ class DeliveryController(FrameProcessor):
         self._user_speaking = False
         self._pending: list[_Pending] = []
         self._settle_task: asyncio.Task | None = None
+        # True once we've asked "want to hear them?" — stays true until
+        # the user affirms or declines. Suppresses further NEXT_SILENCE
+        # drains while awaiting response.
+        self._bid_issued = False
         # Set by app.py after PipelineTask exists. Required for correct
         # out-of-band emission (push_frame from another coroutine context
         # is unsafe).
@@ -179,11 +199,42 @@ class DeliveryController(FrameProcessor):
             await self.push_frame(frame)
 
     async def _drain_eligible(self, *, new_transcript: str | None) -> None:
-        """Pop + emit any pending entries whose policy conditions are met."""
+        """Pop + emit any pending entries whose policy conditions are met.
+
+        If multiple NEXT_SILENCE items would drain together, ask first
+        rather than flushing (bid-then-drain). The user's next transcript
+        resolves the bid.
+        """
         self._prune_overflow()
+
+        # Bid-then-drain gate: if ≥ _BID_THRESHOLD NEXT_SILENCE items are
+        # pending and we haven't bid yet, emit a single bid phrase and
+        # hold. Exception: CRITICAL / TIME_SENSITIVE priorities bypass
+        # the bid — they need to land now.
+        next_silence_items = [
+            p for p in self._pending if p.policy is DeliveryPolicy.NEXT_SILENCE
+        ]
+        high_urgency = [
+            p for p in next_silence_items
+            if _PRIORITY_RANK.get(p.priority, 0) >= _PRIORITY_RANK[Priority.TIME_SENSITIVE]
+        ]
+        if (
+            not self._bid_issued
+            and len(next_silence_items) >= _BID_THRESHOLD
+            and not high_urgency
+        ):
+            await self._emit(self._bid_phrase(next_silence_items))
+            self._bid_issued = True
+            return  # hold items; next transcript resolves
+
         remaining: list[_Pending] = []
         for item in self._pending:
             if item.policy is DeliveryPolicy.NEXT_SILENCE:
+                if self._bid_issued and item not in high_urgency:
+                    # User hasn't answered the bid yet; keep holding non-
+                    # urgent items. High-urgency fall through and emit.
+                    remaining.append(item)
+                    continue
                 await self._emit(item.phrase)
                 continue
             if item.policy is DeliveryPolicy.WHEN_ASKED:
@@ -195,6 +246,40 @@ class DeliveryController(FrameProcessor):
             # Unknown policy — drop silently rather than blocking pipeline.
             logger.warning(f"[delivery] unknown policy on pending item: {item.policy!r}")
         self._pending = remaining
+
+    def _bid_phrase(self, items: list[_Pending]) -> str:
+        """One-line bid announcing the held items. Attributes by source
+        when we can, falls back to a count."""
+        sources = sorted({
+            p.phrase.split(" says — ")[0]
+            for p in items
+            if " says — " in p.phrase
+        })
+        if len(sources) >= 2:
+            names = f"{', '.join(sources[:-1])} and {sources[-1]}"
+            return f"I've got updates from {names} — want to hear them?"
+        if len(sources) == 1:
+            return (
+                f"I've got {len(items)} updates, one from {sources[0]} — "
+                "want to hear them?"
+            )
+        return f"I've got {len(items)} updates pending — want to hear them?"
+
+    async def _resolve_bid(self, transcript: str) -> None:
+        """Check the user's transcript against the held bid.
+        Affirmative → drain; negative → clear; neither → stay held."""
+        low = transcript.lower()
+        if any(token in low for token in _BID_NO):
+            logger.info("[delivery] bid declined — clearing held items")
+            self._pending = [
+                p for p in self._pending if p.policy is not DeliveryPolicy.NEXT_SILENCE
+            ]
+            self._bid_issued = False
+            return
+        if any(token in low for token in _BID_YES):
+            logger.info("[delivery] bid accepted — draining")
+            self._bid_issued = False
+            await self._drain_eligible(new_transcript=None)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -210,6 +295,9 @@ class DeliveryController(FrameProcessor):
             # Schedule a settle-delay drain.
             self._settle_task = asyncio.create_task(self._settle_then_drain())
         elif isinstance(frame, TranscriptionFrame) and frame.text:
+            # Resolve a pending bid first (yes / no / neither).
+            if self._bid_issued:
+                await self._resolve_bid(frame.text)
             # Give `when_asked` entries a chance to match the new utterance.
             await self._drain_eligible(new_transcript=frame.text)
 

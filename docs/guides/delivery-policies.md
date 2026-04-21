@@ -79,6 +79,20 @@ The agent should:
 
 Tune the sleep with `SLOW_RESEARCH_SECS`.
 
+## Bid-then-drain (≥ 2 items)
+
+When two or more `NEXT_SILENCE` items would drain at the same user pause, the controller asks first instead of flushing all of them:
+
+> "I've got updates from ava and slow_research — want to hear them?"
+
+- User says **yes / sure / okay / tell me** → all held items drain now.
+- User says **no / later / skip** → held items are discarded.
+- User says neither (changes topic) → items stay queued; may drain on a future pause or get pruned by overflow.
+
+**Exception:** if any held item has priority `critical` or `time_sensitive`, the bid is bypassed — those land immediately, the rest wait until the user asks.
+
+Pattern from [CHI '24 (Zhang et al., "Better to Ask Than Assume")](https://dl.acm.org/doi/full/10.1145/3613904.3642193) — announce-before-barge outperforms direct delivery on trust and acceptance.
+
 ## Backpressure (overflow pruning)
 
 If the pending queue grows past **3 items** at drain time, the controller drops low-priority stale ones before draining — keeps a long silence from turning into a monologue when results have piled up.
