@@ -224,7 +224,13 @@ async def web_search_handler(params: FunctionCallParams) -> None:
     await params.result_callback(text[:2000])  # keep context manageable
 
 
-def _delegate_to_handler(registry: DelegateRegistry):
+def _delegate_to_handler(
+    registry: DelegateRegistry,
+    *,
+    delivery: "DeliveryController | None" = None,
+    push_notification_url: str | None = None,
+    push_notification_token: str | None = None,
+):
     async def _handler(params: FunctionCallParams) -> None:
         target = (params.arguments.get("target") or "").strip()
         query = (params.arguments.get("query") or "").strip()
@@ -241,8 +247,23 @@ def _delegate_to_handler(registry: DelegateRegistry):
             )
             return
         logger.info(f"[delegate_to] target={target} type={delegate.type} query={query!r}")
+
+        # Stream progress narration back through the voice pipeline when
+        # available. Only wired for A2A delegates (OpenAI delegates don't
+        # stream status updates the same way).
+        progress_cb = None
+        if delivery is not None and delegate.type == "a2a":
+            async def _progress(msg: str) -> None:
+                await delivery.speak_now(msg, source=target)
+            progress_cb = _progress
+
         try:
-            result = await delegate_dispatch(delegate, query)
+            result = await delegate_dispatch(
+                delegate, query,
+                progress_callback=progress_cb,
+                push_notification_url=push_notification_url,
+                push_notification_token=push_notification_token,
+            )
             await params.result_callback(result)
         except DelegateError as e:
             await params.result_callback(f"Couldn't reach {target}: {e}")
@@ -294,12 +315,18 @@ def register_tools(
     on_finish=None,
     delivery: DeliveryController | None = None,
     delegates: DelegateRegistry | None = None,
+    push_notification_url: str | None = None,
+    push_notification_token: str | None = None,
 ) -> ToolsSchema:
     """Attach handlers + return the schema for the LLMContext.
 
     `delegates` — when non-empty, registers `delegate_to` with a schema
     that enumerates the available targets. When empty/None, the tool is
     NOT registered (the LLM doesn't see it, so it can't try to call it).
+
+    `push_notification_url` / `push_notification_token` — forwarded to
+    A2A delegate dispatches so remote agents can call back via the
+    /a2a/push endpoint (see D16/D17).
     """
 
     def _wrap_sync(handler):
@@ -324,7 +351,12 @@ def register_tools(
     if delegates and delegates.names():
         llm.register_function(
             "delegate_to",
-            _wrap_sync(_delegate_to_handler(delegates)),
+            _wrap_sync(_delegate_to_handler(
+                delegates,
+                delivery=delivery,
+                push_notification_url=push_notification_url,
+                push_notification_token=push_notification_token,
+            )),
             cancel_on_interruption=True,
         )
         standard.append(_delegate_to_schema(delegates))

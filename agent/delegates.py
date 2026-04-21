@@ -40,7 +40,12 @@ from typing import Any
 import httpx
 import yaml
 
-from a2a.client import dispatch_message as _a2a_dispatch
+from a2a.client import (
+    A2ADispatchError,
+    ProgressCallback,
+    dispatch_message as _a2a_dispatch,
+    dispatch_message_stream as _a2a_stream,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -195,22 +200,70 @@ class DelegateError(RuntimeError):
     """Raised on any dispatch failure. Caller speaks the message back to the user."""
 
 
-async def dispatch(delegate: Delegate, query: str, *, timeout: float = 60.0) -> str:
+async def dispatch(
+    delegate: Delegate,
+    query: str,
+    *,
+    timeout: float = 60.0,
+    progress_callback: ProgressCallback | None = None,
+    push_notification_url: str | None = None,
+    push_notification_token: str | None = None,
+) -> str:
+    """Dispatch `query` to the given delegate. For A2A delegates, prefer
+    SSE streaming so the voice layer can narrate intermediate status via
+    `progress_callback`. OpenAI delegates don't stream here (chat
+    completion non-stream); they're usually fast enough not to need it.
+    """
     if delegate.type == "a2a":
-        return await _dispatch_a2a(delegate, query, timeout=timeout)
+        return await _dispatch_a2a(
+            delegate, query,
+            timeout=timeout,
+            progress_callback=progress_callback,
+            push_notification_url=push_notification_url,
+            push_notification_token=push_notification_token,
+        )
     if delegate.type == "openai":
         return await _dispatch_openai(delegate, query, timeout=timeout)
     raise DelegateError(f"unknown delegate type {delegate.type!r}")
 
 
-async def _dispatch_a2a(delegate: Delegate, query: str, *, timeout: float) -> str:
-    """Reuse the existing A2A wire client."""
-    return await _a2a_dispatch(
-        url=delegate.url,
-        headers=delegate.auth_headers(),
-        user_text=query,
-        timeout=timeout,
-    )
+async def _dispatch_a2a(
+    delegate: Delegate,
+    query: str,
+    *,
+    timeout: float,
+    progress_callback: ProgressCallback | None = None,
+    push_notification_url: str | None = None,
+    push_notification_token: str | None = None,
+) -> str:
+    """Try streaming first; fall back to sync message/send if stream fails.
+
+    Streaming lets the voice layer narrate intermediate status updates
+    through `progress_callback` as the remote agent works. Sync fallback
+    keeps the delegate usable against servers that haven't implemented
+    `message/stream` yet.
+    """
+    try:
+        return await _a2a_stream(
+            url=delegate.url,
+            headers=delegate.auth_headers(),
+            user_text=query,
+            timeout=timeout,
+            progress_callback=progress_callback,
+            push_notification_url=push_notification_url,
+            push_notification_token=push_notification_token,
+        )
+    except A2ADispatchError as e:
+        logger.warning(
+            f"[delegates] {delegate.name} streaming failed ({e}); "
+            "falling back to message/send"
+        )
+        return await _a2a_dispatch(
+            url=delegate.url,
+            headers=delegate.auth_headers(),
+            user_text=query,
+            timeout=timeout,
+        )
 
 
 async def _dispatch_openai(delegate: Delegate, query: str, *, timeout: float) -> str:

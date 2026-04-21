@@ -139,6 +139,13 @@ class DeliveryController(FrameProcessor):
     def set_emitter(self, emitter: FrameEmitter) -> None:
         self._emitter = emitter
 
+    async def speak_now(self, phrase: str, *, source: str | None = None) -> None:
+        """Push a TTSSpeakFrame immediately without touching the pending
+        queue. For in-flight progress narration during long delegated
+        tasks — different semantic from `deliver()`, which implies a
+        FINAL result gated by a policy."""
+        await self._emit(_attribute(phrase, source))
+
     # --- Cross-session persistence helpers --------------------------------
 
     def snapshot_pending(self) -> list[dict[str, object]]:
