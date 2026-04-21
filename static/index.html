@@ -295,35 +295,18 @@
       min-height: 1.1em;
     }
 
-    /* --- Floating status pill ----------------------------------------- */
-    #status-float {
-      position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%);
+    /* --- Floating helper text — single element for all statuses --------- */
+    #status-pill {
+      position: fixed; bottom: 1.75rem; left: 50%; transform: translateX(-50%);
       z-index: 15;
-      padding: 0.35rem 0.8rem;
-      background: var(--bg-1);
-      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-      border: 1px solid var(--border-strong);
-      border-radius: 9999px;
-      font-size: 0.75rem; color: var(--fg); letter-spacing: 0.01em;
+      font-size: 0.75rem;
+      color: var(--fg-subtle);
+      letter-spacing: 0.04em;
+      text-transform: lowercase;
       pointer-events: none;
-      transition: opacity 600ms ease;
-    }
-    #status-float:empty { opacity: 0; }
-
-    #idle-hint {
-      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
-      z-index: 14;
-      padding: 0.35rem 0.8rem;
-      background: var(--bg-1);
-      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-      border: 1px solid var(--border-strong);
-      border-radius: 9999px;
-      font-size: 0.75rem; color: var(--fg-muted);
-      letter-spacing: 0.02em;
-      pointer-events: none; opacity: 0;
       transition: opacity 400ms ease;
     }
-    #idle-hint.show { opacity: 1; }
+    #status-pill:empty { opacity: 0; }
   </style>
 </head>
 <body>
@@ -448,8 +431,7 @@
     </div>
   </aside>
 
-  <div id="status-float"></div>
-  <div id="idle-hint" class="show">double-click the orb to start</div>
+  <div id="status-pill">double-click the orb to start</div>
   <audio id="audio" autoplay></audio>
 
   <script type="module">
@@ -708,8 +690,8 @@
     // --- WebRTC ---------------------------------------------------------
     const btn = document.getElementById("btn");
     const audioEl = document.getElementById("audio");
-    const statusEl = document.getElementById("status-float");
-    const idleHint = document.getElementById("idle-hint");
+    const statusEl = document.getElementById("status-pill");
+    const IDLE_HINT = "double-click the orb to start";
 
     let _transientTimer = null;
     const clearTransient = () => {
@@ -748,7 +730,6 @@
       if (session !== 'idle') return;
       session = 'starting';
       btn.disabled = true;
-      idleHint.classList.remove('show');
       setStatus("requesting mic...");
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -756,7 +737,7 @@
         setStatus("mic denied");
         btn.disabled = false;
         session = 'idle';
-        idleHint.classList.add('show');
+        setTimeout(() => { if (session === 'idle') setStatus(IDLE_HINT); }, 2000);
         return;
       }
 
@@ -826,8 +807,7 @@
       btn.textContent = "Start";
       btn.disabled = false;
       session = 'idle';
-      setStatus("");
-      idleHint.classList.add('show');
+      setStatus(IDLE_HINT);
     };
 
     const toggleSession = () => {
