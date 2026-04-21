@@ -289,6 +289,12 @@ const STATE_XFADE_MS = 600;        // state-to-state interpolation — slower = 
 // don't translate into huge uTime or rotation jumps on the next frame.
 const MAX_DELTA_S = 1 / 30;        // ~33 ms = 30 fps floor
 
+// Global rotation scaling — applies on top of per-state rotation factors.
+// Makes the idle spin feel contemplative rather than restless.
+const ROTATION_SCALE = 0.45;
+// Max drag-spun velocity (rad/s) — clamps wild flings to a smoother spin.
+const DRAG_VEL_MAX = 3.5;
+
 // Idle breath — two non-commensurate low-frequency sines for life-without-loops.
 const BREATH_HZ_1 = 0.10;
 const BREATH_HZ_2 = 0.037;
@@ -551,11 +557,12 @@ export class VoiceOrb {
       const dx = e.clientX - this._lastPointer.x;
       const dy = e.clientY - this._lastPointer.y;
       this._dragMoved += Math.hypot(dx, dy);
-      const SENSITIVITY = 0.006;
+      const SENSITIVITY = 0.003;  // radians per pixel
       this.orb.rotation.y += dx * SENSITIVITY;
       this.orb.rotation.x += dy * SENSITIVITY;
-      const instVy = (dx * SENSITIVITY) / dt;
-      const instVx = (dy * SENSITIVITY) / dt;
+      const clamp = (v, m) => Math.max(-m, Math.min(m, v));
+      const instVy = clamp((dx * SENSITIVITY) / dt, DRAG_VEL_MAX);
+      const instVx = clamp((dy * SENSITIVITY) / dt, DRAG_VEL_MAX);
       this._dragVel.y = lerp(this._dragVel.y, instVy, 0.5);
       this._dragVel.x = lerp(this._dragVel.x, instVx, 0.5);
       this._lastPointer = { x: e.clientX, y: e.clientY, t: nowMs };
@@ -815,9 +822,10 @@ export class VoiceOrb {
 
     // Time + rotation integrate by delta (continuous, no smoothing needed).
     // Auto-rotation comes from state, plus any user-drag momentum on top.
+    // ROTATION_SCALE globally dampens the spin — keeps the motion contemplative.
     this.uniforms.uTime.value += delta * s.speed;
-    this.orb.rotation.y += delta * s.rotation + this._dragVel.y * delta;
-    this.orb.rotation.x += delta * (s.rotation * 0.5) + this._dragVel.x * delta;
+    this.orb.rotation.y += delta * s.rotation * ROTATION_SCALE + this._dragVel.y * delta;
+    this.orb.rotation.x += delta * (s.rotation * 0.5) * ROTATION_SCALE + this._dragVel.x * delta;
 
     // Wrap ever-growing accumulators at multiples of 2π so sin/cos stay
     // numerically clean. GLSL uploads uTime as float32 — over ~10 minutes
