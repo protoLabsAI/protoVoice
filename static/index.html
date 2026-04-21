@@ -235,6 +235,33 @@
       gap: 0.375rem; align-items: center;
     }
 
+    /* --- Tabs ---------------------------------------------------------- */
+    .tabs-list {
+      display: grid; grid-template-columns: 1fr 1fr;
+      padding: 3px; gap: 2px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .tabs-list [role="tab"] {
+      padding: 0.4rem 0.75rem;
+      background: transparent; border: 0;
+      border-radius: calc(var(--radius) - 2px);
+      color: var(--fg-muted);
+      font-size: 0.8125rem; font-family: inherit; font-weight: 500;
+      cursor: pointer;
+      transition: background 120ms, color 120ms;
+    }
+    .tabs-list [role="tab"]:hover { color: var(--fg); }
+    .tabs-list [role="tab"][aria-selected="true"] {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--fg);
+    }
+    .tab-panel {
+      display: flex; flex-direction: column; gap: 1.25rem;
+    }
+    .tab-panel[hidden] { display: none; }
+
     /* --- Collapsible --------------------------------------------------- */
     details.clone { display: flex; flex-direction: column; gap: 0.625rem; }
     details.clone summary {
@@ -311,25 +338,61 @@
 
       <button id="btn" class="btn">Start</button>
 
-      <div class="section">
-        <div class="section-label">Session</div>
-        <div class="field">
-          <label for="skill">Skill</label>
-          <select id="skill" title="Applies on next Start"></select>
+      <div role="tablist" class="tabs-list" aria-label="Settings">
+        <button role="tab" id="tab-voice" aria-selected="true"
+                aria-controls="panel-voice" data-panel="voice">Voice</button>
+        <button role="tab" id="tab-orb" aria-selected="false"
+                aria-controls="panel-orb" data-panel="orb">Orb</button>
+      </div>
+
+      <div role="tabpanel" id="panel-voice" class="tab-panel" aria-labelledby="tab-voice">
+        <div class="section">
+          <div class="section-label">Session</div>
+          <div class="field">
+            <label for="skill">Skill</label>
+            <select id="skill" title="Applies on next Start"></select>
+          </div>
+          <div class="field">
+            <label for="verbosity">Verbosity</label>
+            <select id="verbosity">
+              <option value="silent">silent</option>
+              <option value="brief" selected>brief</option>
+              <option value="narrated">narrated</option>
+              <option value="chatty">chatty</option>
+            </select>
+          </div>
         </div>
-        <div class="field">
-          <label for="verbosity">Verbosity</label>
-          <select id="verbosity">
-            <option value="silent">silent</option>
-            <option value="brief" selected>brief</option>
-            <option value="narrated">narrated</option>
-            <option value="chatty">chatty</option>
-          </select>
+
+        <div class="section">
+          <details class="clone">
+            <summary>Clone a new voice</summary>
+            <form class="clone-form" id="clone-form">
+              <label>Audio sample (10–30 s)
+                <input type="file" id="clone-audio" accept="audio/*" required>
+              </label>
+              <label>Slug
+                <input type="text" id="clone-slug" placeholder="e.g. alex" required
+                  pattern="[a-z0-9][a-z0-9\-_]{1,63}">
+              </label>
+              <label>Display name (optional)
+                <input type="text" id="clone-name" placeholder="e.g. Alex">
+              </label>
+              <label>Transcript (leave empty to auto-transcribe)
+                <textarea id="clone-transcript" placeholder="Exactly what the clip says."></textarea>
+              </label>
+              <label>Description (optional)
+                <input type="text" id="clone-description" placeholder="e.g. Voice-cloned Alex">
+              </label>
+              <button type="submit" class="btn ghost">Clone voice</button>
+              <div class="clone-status" id="clone-status"></div>
+            </form>
+          </details>
         </div>
       </div>
 
-      <div class="section">
-        <div class="section-label">Preset</div>
+      <div role="tabpanel" id="panel-orb" class="tab-panel" aria-labelledby="tab-orb" hidden>
+        <div class="section">
+          <div class="section-label">Preset</div>
         <div class="field">
           <label for="viz-preset">Palette</label>
           <select id="viz-preset">
@@ -377,32 +440,7 @@
         <div class="section-label">Performance</div>
         <!-- filled by JS -->
       </div>
-
-      <div class="section">
-        <details class="clone">
-          <summary>Clone a new voice</summary>
-          <form class="clone-form" id="clone-form">
-            <label>Audio sample (10–30 s)
-              <input type="file" id="clone-audio" accept="audio/*" required>
-            </label>
-            <label>Slug
-              <input type="text" id="clone-slug" placeholder="e.g. alex" required
-                pattern="[a-z0-9][a-z0-9\-_]{1,63}">
-            </label>
-            <label>Display name (optional)
-              <input type="text" id="clone-name" placeholder="e.g. Alex">
-            </label>
-            <label>Transcript (leave empty to auto-transcribe)
-              <textarea id="clone-transcript" placeholder="Exactly what the clip says."></textarea>
-            </label>
-            <label>Description (optional)
-              <input type="text" id="clone-description" placeholder="e.g. Voice-cloned Alex">
-            </label>
-            <button type="submit" class="btn ghost">Clone voice</button>
-            <div class="clone-status" id="clone-status"></div>
-          </form>
-        </details>
-      </div>
+      </div><!-- /panel-orb -->
     </div>
   </aside>
 
@@ -425,6 +463,22 @@
       drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
       toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
     });
+
+    // --- Tabs ------------------------------------------------------------
+    const STORAGE_TAB = 'protoVoice.tab';
+    const tabs = document.querySelectorAll('[role="tab"]');
+    const panels = document.querySelectorAll('.tab-panel');
+    const selectTab = (name) => {
+      tabs.forEach(t => t.setAttribute('aria-selected',
+        t.dataset.panel === name ? 'true' : 'false'));
+      panels.forEach(p => { p.hidden = p.id !== `panel-${name}`; });
+      try { localStorage.setItem(STORAGE_TAB, name); } catch (_) {}
+    };
+    tabs.forEach(t => t.addEventListener('click', () => selectTab(t.dataset.panel)));
+    try {
+      const saved = localStorage.getItem(STORAGE_TAB);
+      if (saved === 'voice' || saved === 'orb') selectTab(saved);
+    } catch (_) {}
 
     // --- Slider / color factories ---------------------------------------
     const paramInputs = {};   // key → (value) => updates the UI display
