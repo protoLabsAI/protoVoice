@@ -550,8 +550,20 @@ export class VoiceOrb {
       // Bloom tracks the cursor immediately on press.
       this._pulseAt(e.clientX, e.clientY);
     };
+    const releaseDrag = () => {
+      if (!this._dragging) return;
+      this._dragging = false;
+      this._holding = false;
+      this._dragVel.x = 0;
+      this._dragVel.y = 0;
+    };
     const move = (e) => {
       if (!this._dragging) return;
+      // Safety: if the pointer is no longer pressed (missed pointerup —
+      // can happen on devtools focus steal, alt-tab mid-click, etc.)
+      // release drag state NOW. Without this, captured pointer moves leak
+      // into _dragVel and auto-spin the orb.
+      if (e.buttons === 0) { releaseDrag(); return; }
       const nowMs = performance.now();
       const dt = Math.max(1, nowMs - this._lastPointer.t) / 1000;
       const dx = e.clientX - this._lastPointer.x;
@@ -581,7 +593,13 @@ export class VoiceOrb {
     dom.addEventListener('pointermove', move);
     dom.addEventListener('pointerup', up);
     dom.addEventListener('pointercancel', up);
-    this._pointerHandlers = { dom, down, move, up };
+    // Window blur / visibility change — any path that takes focus away
+    // mid-drag (alt-tab, devtools focus, OS-level interrupts) should drop
+    // the drag rather than leave it captured.
+    const onBlur = () => releaseDrag();
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onBlur);
+    this._pointerHandlers = { dom, down, move, up, onBlur };
   }
 
   _pulseAt(clientX, clientY) {
@@ -695,11 +713,13 @@ export class VoiceOrb {
     this._running = false;
     window.removeEventListener('resize', this._onResize);
     if (this._pointerHandlers) {
-      const { dom, down, move, up } = this._pointerHandlers;
+      const { dom, down, move, up, onBlur } = this._pointerHandlers;
       dom.removeEventListener('pointerdown', down);
       dom.removeEventListener('pointermove', move);
       dom.removeEventListener('pointerup', up);
       dom.removeEventListener('pointercancel', up);
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onBlur);
     }
     this.detachStream('local');
     this.detachStream('remote');
