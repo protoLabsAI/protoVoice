@@ -134,7 +134,7 @@ TOOL_LATENCY: dict[str, Latency] = {
 ### What happens at runtime
 
 1. User asks "can you do a deep dive on quantum computing when you have a moment?"
-2. LLM emits inline preamble ("alright, give me a few minutes") — spoken immediately via the M10 prompt block
+2. LLM emits inline preamble ("alright, give me a few minutes") — spoken immediately via the [TOOL USE prompt block](/explanation/natural-fillers#opening-preamble-inline)
 3. LLM calls `deep_dive(topic="quantum computing")`
 4. Handler returns immediately; pipecat marks the call `in_progress`
 5. User keeps chatting — agent answers normally

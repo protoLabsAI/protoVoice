@@ -45,14 +45,16 @@
 
 ## Why FastAPI under Pipecat?
 
-Pipecat's `SmallWebRTCTransport` doesn't ship a server; it's a library you mount on whatever HTTP framework you want. We use FastAPI so we can:
+Pipecat's `SmallWebRTCTransport` doesn't ship a server; it's a library you mount on whatever HTTP framework you want. We use FastAPI so we can host, alongside the voice pipeline:
 
-- Expose the WebRTC signalling (`/api/offer` POST + PATCH)
-- Expose session control (`/api/verbosity`)
-- Eventually expose an inbound A2A JSON-RPC endpoint alongside the voice traffic
-- Serve the static HTML client
+- WebRTC signalling — `POST /api/offer` + `PATCH /api/offer` (trickle ICE).
+- Session control — `POST /api/verbosity`, `POST /api/skills`, `POST /api/voice/clone`, `GET /healthz`, `GET /metrics`.
+- Inbound A2A JSON-RPC — `POST /a2a` handles both `message/send` (sync) and `message/stream` (SSE) per spec; the text agent runs a bounded ReAct loop so external fleet agents can use our tool registry. See [A2A Integration](/guides/a2a-integration).
+- A2A push callbacks — `POST /a2a/push` (spec-conformant) and `POST /a2a/callback` (legacy permissive shape).
+- Agent card — `GET /.well-known/agent.json` for A2A discovery.
+- The static HTML client served from `static/`.
 
-The pipeline itself runs inside a `PipelineTask` spawned by a FastAPI background task per connected WebRTC peer.
+The pipeline itself runs inside a `PipelineTask` spawned per connected WebRTC peer; text-only A2A traffic bypasses the pipeline entirely and calls the text agent directly.
 
 ## Network topology
 

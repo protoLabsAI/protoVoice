@@ -25,7 +25,7 @@ We evaluated four options before committing:
 
 **`TTSSpeakFrame` is the primitive we need.** "Speak this now, independent of the current LLM turn." One import, one `queue_frame` call, done. Compare to FastRTC where we'd be reinventing the stream handler.
 
-**Async tool calls are native.** Register a function with `cancel_on_interruption=False` and pipecat injects the result as a developer message when it resolves — solving half of M3 for free.
+**Async tool calls are native.** Register a function with `cancel_on_interruption=False` and pipecat injects the result as a developer message when it resolves. Our `DeliveryController` layers policy (NOW / NEXT_SILENCE / WHEN_ASKED) on top.
 
 **Local services are a supported pattern.** Pipecat ships `SegmentedSTTService`, `TTSService`, and `LLMService` as abstract bases. Subclass, yield the right frames, done. Our Whisper and Kokoro wrappers are 40-80 lines each. `OpenAILLMService(base_url=...)` points straight at our local vLLM.
 

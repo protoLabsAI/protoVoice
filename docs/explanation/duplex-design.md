@@ -25,24 +25,26 @@ The duplex solution: register the tool with `cancel_on_interruption=False`. Pipe
 
 Pipecat's native async tool path handles the plumbing. Our `TaskInbox` concept from the original design is redundant — pipecat already implements it.
 
-M3 switches `deep_research` to `cancel_on_interruption=False` to validate this. M4 adds the delivery-policy matrix:
+The delivery-policy matrix governs when the injected result is actually spoken:
 
-- **`now`** — push the result immediately, interrupting the user if necessary. Reserved for results the user is actively waiting for.
-- **`next_silence`** — wait for VAD-detected silence, then speak. The default.
-- **`when_asked`** — only speak if the user references the topic. Quietest option.
+- **`now`** — push immediately, interrupting the user if necessary. Reserved for urgent results the user is actively waiting for (mapped from `Priority.CRITICAL`).
+- **`next_silence`** — wait for VAD-detected silence + 600 ms settle, then speak (from `Priority.TIME_SENSITIVE`). A fallback timer drains anyway if the user stays muted past `DELIVERY_NEXT_SILENCE_FALLBACK_SECS`.
+- **`when_asked`** — only speak if the user's next utterance references one of the query's keywords (from `Priority.ACTIVE`). Items past TTL (`DELIVERY_WHEN_ASKED_TTL_SECS`, default 10 min) are dropped silently.
+
+See [Delivery Policies](/guides/delivery-policies) for the full Priority → policy mapping, bid-then-drain, and cross-session replay behaviour.
 
 ## Why this isn't a race
 
 Two things could collide:
 
 - **Filler and the real answer overlap.** Pipecat serializes `TTSSpeakFrame`s in queue order. Filler goes first, real response second. If the real response arrives mid-filler, pipecat's text aggregator holds it until the filler finishes speaking.
-- **Push and barge-in collide.** If a push result arrives while the user is speaking, VAD fires `UserStartedSpeakingFrame` and broadcasts interruption. The push frame gets dropped by pipecat's interruption handler unless marked `now`, in which case we force it through by bypassing the user aggregator (planned M3 detail).
+- **Push and barge-in collide.** If a push result arrives while the user is speaking, VAD fires `UserStartedSpeakingFrame` and broadcasts interruption. `next_silence` items wait for the user to finish + settle delay; `now`-priority items emit anyway. An `BargeInGate` processor applies adaptive filtering on the user side so coughs / backchannels don't count as real interruptions.
 
 ## Barge-in vs tool cancellation
 
 By default tools register with `cancel_on_interruption=True` — the user speaking mid-tool cancels the running tool. Good for synchronous "let me check that" flows. Bad for "kicked off a 2-minute research task in the background" flows.
 
-M4+ will let the tool schema declare `cancelable: bool`. The LLM can inspect this and choose whether to use it based on expected duration.
+Each tool declares its own `cancel_on_interruption` at registration time (see `agent/tools.py::register_tools`). Fast tools stay cancellable; `slow_research` and any other async tool opt out so they keep running in the background.
 
 ## Filler UX gotchas
 
