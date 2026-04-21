@@ -12,11 +12,14 @@
 
 delegates:
   # ─── Ava — chief of staff on workstacean ────────────────────────────
-  # A2A flip (F7) is code-ready: a2a/client.py now sends messageId,
-  # outbound streaming works against https://ava.proto-labs.ai/a2a.
-  # But workstacean's /a2a currently returns a Task with no text
-  # artifact (known bug, tracked protoMaker#3536 per user). Holding
-  # on type=openai until that lands; swap the block below when ready:
+  # A2A flip (F7) is code-ready: a2a/client.py sends messageId and is
+  # spec-tolerant (falls back to status.message when artifacts is empty).
+  # Held on type=openai because of two bugs on protoWorkstacean's /a2a:
+  #   1. message/send routes to protoBot instead of ava
+  #   2. message/stream intermittently returns an upstream "Cannot POST /"
+  #      404 as the reply text
+  # Tracked: https://github.com/protoLabsAI/protoWorkstacean/issues/471
+  # When both land, swap the block below:
   #
   #   type: a2a
   #   url: https://ava.proto-labs.ai/a2a

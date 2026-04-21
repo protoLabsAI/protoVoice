@@ -95,6 +95,10 @@ Outbound A2A is one branch of the unified `delegate_to(target, query)` tool. Tar
 
 Outbound dispatch **prefers `message/stream`** per the [A2A streaming spec](https://a2a-protocol.org/latest/topics/streaming-and-async/). Each `TaskStatusUpdateEvent` with a human-readable message is narrated through the voice pipeline via `delivery.speak_now(source=target)` — users hear "ava: still compiling the sitrep…" in-flight instead of silent waiting. Falls back to `message/send` on SSE errors.
 
+### Reply shape tolerance
+
+Per A2A spec, a completed `Task` may deliver its final assistant text either as an `artifacts[]` entry or via its terminal `status.message.parts[]`. Our client accepts both — if `artifacts` is empty we fall back to the terminal status message. This applies in both the sync (`message/send`) and streaming (`message/stream`) paths.
+
 ### Push-notification callbacks
 
 When `A2A_PUSH_URL` + `A2A_PUSH_TOKEN` are set, outbound dispatches attach a `pushNotificationConfig` pointing at our `/a2a/push` endpoint. If the SSE stream drops, or the remote agent completes after we disconnect, they call us back:

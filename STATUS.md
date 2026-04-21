@@ -36,7 +36,7 @@ Updated after v0.6.0 ship. Branch: `main`. Working tree: clean.
 ## Waiting on external
 
 ### Workstacean
-1. **F7 ava delegate flip** — code-complete on our side (messageId ✓, streaming ✓, auth ✓, trace headers ✓). Config held at `type: openai` because their `/a2a` returns a Task with **no text artifact** (user referenced this as `protoMaker#3536`). When their fix lands, edit `config/delegates.yaml` and swap the commented a2a block for the openai one — nothing else needed.
+1. **F7 ava delegate flip** — code-complete on our side (messageId ✓, streaming ✓, auth ✓, trace headers ✓, spec-tolerant fallback to `status.message` when `artifacts` is empty ✓). Held at `type: openai` pending [protoWorkstacean#471](https://github.com/protoLabsAI/protoWorkstacean/issues/471): (a) `message/send` routes to protoBot instead of ava, (b) `message/stream` intermittently returns an upstream "Cannot POST /" 404 as the reply text. When both land, edit `config/delegates.yaml` and swap the commented a2a block for the openai one — nothing else needed.
 2. **Tracing contract implementation** — [`docs/reference/tracing-contract.md`](https://protolabsai.github.io/protoVoice/reference/tracing-contract/) defines `Langfuse-Trace-Id` / `Langfuse-Session-Id` / `Langfuse-Parent-Observation-Id`. They implement "continue, don't create" in their `/a2a` handler. Until they do, we attach the headers but traces don't stitch across the fleet.
 
 ### Langfuse config

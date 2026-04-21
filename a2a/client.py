@@ -91,13 +91,10 @@ async def dispatch_message(
         raise A2ADispatchError(f"{body['error']}")
 
     result = body.get("result") or {}
-    artifacts = result.get("artifacts") or []
-    for art in artifacts:
-        for part in art.get("parts") or []:
-            kind = part.get("kind") or part.get("type")
-            if kind == "text" and part.get("text"):
-                return part["text"]
-    raise A2ADispatchError(f"response from {url} had no text artifact")
+    text = _first_task_artifact_text(result) or _status_message_text(result)
+    if text:
+        return text
+    raise A2ADispatchError(f"response from {url} had no text reply")
 
 
 # ---------------------------------------------------------------------------
@@ -196,15 +193,22 @@ async def dispatch_message_stream(
                 result = event.get("result") or {}
                 kind = result.get("kind") or result.get("type") or ""
 
-                # Status update — narrate if caller asked.
+                # Status update — narrate mid-task text as progress; on a
+                # terminal update, treat `status.message` as the final reply
+                # if no artifact has been streamed (A2A spec allows either).
                 if kind in ("task-status-update", "taskStatusUpdate", "status-update"):
                     msg = _status_message_text(result)
-                    if msg and progress_callback:
-                        try:
-                            await progress_callback(msg)
-                        except Exception as e:
-                            logger.warning(f"[a2a/stream] progress_callback raised: {e}")
-                    if result.get("final") or _is_terminal(result):
+                    terminal = result.get("final") or _is_terminal(result.get("status") or {})
+                    if msg:
+                        if terminal:
+                            if not final_text:
+                                final_text = msg
+                        elif progress_callback:
+                            try:
+                                await progress_callback(msg)
+                            except Exception as e:
+                                logger.warning(f"[a2a/stream] progress_callback raised: {e}")
+                    if terminal:
                         break
                     continue
 
@@ -215,9 +219,10 @@ async def dispatch_message_stream(
                         final_text = (final_text or "") + text
                     continue
 
-                # Full Task snapshot — extract its artifacts.
+                # Full Task snapshot — extract artifact text, or fall back
+                # to status.message if artifacts are empty.
                 if kind == "task":
-                    text = _first_task_artifact_text(result)
+                    text = _first_task_artifact_text(result) or _status_message_text(result)
                     if text:
                         final_text = text
                     if _is_terminal(result.get("status") or {}):
