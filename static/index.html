@@ -747,18 +747,7 @@
       idleHint.classList.remove('show');
       setStatus("requesting mic...");
       try {
-        // Disable the two adaptive mic-DSP blocks that drifted the viz
-        // signal over time: AGC (ramps gain on quiet stretches) and NS
-        // (learns noise floor). echoCancellation is LEFT ON — essential
-        // for users speaking over speakers (no headphones), otherwise
-        // the bot's audio feeds back into the mic and the server-side
-        // VAD loops on itself.
-        localStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            autoGainControl: false,
-            noiseSuppression: false,
-          },
-        });
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (_e) {
         setStatus("mic denied");
         btn.disabled = false;

@@ -273,9 +273,7 @@ const ENV_BOT  = { attack: 0.25, release: 0.10 };  // smoother AI pump
 const DISP_ALPHA = 0.10;
 
 // Byte-domain RMS scaling. Silence is ~0.003, shouting peaks ~0.35.
-// Floor is 0.025 to give a safety margin above ambient hiss now that the
-// browser's AGC is disabled (mic gain is fixed, ambient stays well below).
-const NORM_FLOOR = 0.025;
+const NORM_FLOOR = 0.020;
 const NORM_CEIL  = 0.300;
 
 // State machine thresholds (on the normalized envelope, not raw RMS).
