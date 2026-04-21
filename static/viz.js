@@ -768,6 +768,20 @@ export class VoiceOrb {
     this.uniforms.uTime.value += delta * s.speed;
     this.orb.rotation.y += delta * s.rotation + this._dragVel.y * delta;
     this.orb.rotation.x += delta * (s.rotation * 0.5) + this._dragVel.x * delta;
+
+    // Wrap ever-growing accumulators at multiples of 2π so sin/cos stay
+    // numerically clean. GLSL uploads uTime as float32 — over ~10 minutes
+    // of runtime the nested sin/cos inside the fractal starts to jitter
+    // visibly without this. Wrap point is 2π·N so wrap is invisible.
+    const TWO_PI = Math.PI * 2;
+    const TIME_WRAP = TWO_PI * 100;
+    if (this.uniforms.uTime.value > TIME_WRAP) {
+      this.uniforms.uTime.value -= TIME_WRAP;
+    }
+    if (this.orb.rotation.y > TWO_PI * 50)  this.orb.rotation.y -= TWO_PI * 50;
+    if (this.orb.rotation.y < -TWO_PI * 50) this.orb.rotation.y += TWO_PI * 50;
+    if (this.orb.rotation.x > TWO_PI * 50)  this.orb.rotation.x -= TWO_PI * 50;
+    if (this.orb.rotation.x < -TWO_PI * 50) this.orb.rotation.x += TWO_PI * 50;
     // Decay drag velocity when the user isn't holding the pointer.
     if (!this._dragging) {
       const DAMP = 0.96;  // ~4% drop per frame → ~0.7s half-life at 60fps
