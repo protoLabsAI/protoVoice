@@ -430,7 +430,9 @@ export class VoiceOrb {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x000000);
     this.camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
-    this.camera.position.set(0, 0, 6);
+    // Start at midpoint of the zoom range [6, 20] so the user has room to
+    // zoom in AND out from the default view.
+    this.camera.position.set(0, 0, 13);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setSize(container.clientWidth, container.clientHeight);
