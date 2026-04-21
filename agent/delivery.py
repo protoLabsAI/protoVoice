@@ -144,7 +144,12 @@ class DeliveryController(FrameProcessor):
         queue. For in-flight progress narration during long delegated
         tasks — different semantic from `deliver()`, which implies a
         FINAL result gated by a policy."""
-        await self._emit(_attribute(phrase, source))
+        from agent import tracing
+        with tracing.span(
+            "delivery.speak_now",
+            input={"source": source, "preview": phrase[:120]},
+        ):
+            await self._emit(_attribute(phrase, source))
 
     # --- Cross-session persistence helpers --------------------------------
 

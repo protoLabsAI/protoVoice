@@ -27,6 +27,8 @@ import httpx
 import numpy as np
 import soundfile as sf
 import soxr
+
+from agent import tracing
 import torch
 from openai import AsyncOpenAI
 from pipecat.frames.frames import ErrorFrame, Frame, TranscriptionFrame
@@ -95,12 +97,20 @@ class LocalWhisperSTT(SegmentedSTTService):
         if sr != 16000:
             data = soxr.resample(data, sr, 16000)
 
-        try:
-            result = _get_local_pipe()({"raw": data.flatten(), "sampling_rate": 16000})
-            text = (result.get("text") or "").strip()
-        except Exception as e:
-            yield ErrorFrame(error=f"STT inference failed: {e}")
-            return
+        duration_s = len(data) / 16000.0
+        with tracing.span(
+            "stt.whisper",
+            input={"sample_rate": 16000, "audio_seconds": round(duration_s, 2)},
+            metadata={"backend": "local"},
+        ) as sp:
+            try:
+                result = _get_local_pipe()({"raw": data.flatten(), "sampling_rate": 16000})
+                text = (result.get("text") or "").strip()
+            except Exception as e:
+                sp.update(level="ERROR", status_message=str(e))
+                yield ErrorFrame(error=f"STT inference failed: {e}")
+                return
+            sp.update(output=text)
 
         if text:
             yield TranscriptionFrame(text, self._user_id, time_now_iso8601())

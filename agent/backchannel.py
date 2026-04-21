@@ -91,19 +91,23 @@ class BackchannelController(FrameProcessor):
             pass
 
     async def _emit_one(self) -> None:
-        try:
-            phrase = await self._gen.backchannel(tts_backend=self._backend)
-        except Exception as e:
-            logger.warning(f"[backchannel] generator raised: {e}")
-            return
-        if not phrase:
-            return
-        logger.info(f"[backchannel] {phrase!r}")
-        # Backchannels MUST stay out of LLM context — they're listener
-        # noises, not assistant turns. Otherwise the LLM thinks it just
-        # said "mm-hmm" and may continue from there.
-        frame = TTSSpeakFrame(phrase, append_to_context=False)
-        if self._emitter is not None:
-            await self._emitter(frame)
-        else:
-            await self.push_frame(frame)
+        from agent import tracing
+        with tracing.span("backchannel.emit") as sp:
+            try:
+                phrase = await self._gen.backchannel(tts_backend=self._backend)
+            except Exception as e:
+                sp.update(level="WARNING", status_message=str(e))
+                logger.warning(f"[backchannel] generator raised: {e}")
+                return
+            if not phrase:
+                sp.update(status_message="skipped (empty)")
+                return
+            sp.update(output=phrase)
+            logger.info(f"[backchannel] {phrase!r}")
+            # Backchannels MUST stay out of LLM context — they're listener
+            # noises, not assistant turns.
+            frame = TTSSpeakFrame(phrase, append_to_context=False)
+            if self._emitter is not None:
+                await self._emitter(frame)
+            else:
+                await self.push_frame(frame)

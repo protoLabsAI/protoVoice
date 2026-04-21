@@ -580,25 +580,31 @@ async def run_bot(webrtc_connection) -> None:
         silence. Over-narrating past ~8 s starts feeling performative.
         Cancelled on tool completion or barge-in via `_cancel_progress`."""
         try:
-            for sleep_secs in (
+            for idx, sleep_secs in enumerate((
                 _FILLER.progress_first_secs,
                 _FILLER.progress_second_secs,
-            ):
+            )):
                 await asyncio.sleep(sleep_secs)
-                try:
-                    phrase = await _FILLER_GEN.progress(
-                        tool_name=tool_name,
-                        user_utterance=_last_user_text(),
-                        tts_backend=tts_backend,
-                    )
-                except Exception as e:
-                    logger.warning(f"[filler:progress] generator raised: {e}")
-                    phrase = None
-                if phrase:
-                    logger.info(f"[filler:progress] {phrase!r}")
-                    await task.queue_frame(
-                        TTSSpeakFrame(phrase, append_to_context=False)
-                    )
+                with _tracing.span(
+                    "filler.progress",
+                    input={"tool": tool_name, "tier": "first" if idx == 0 else "second"},
+                ) as sp:
+                    try:
+                        phrase = await _FILLER_GEN.progress(
+                            tool_name=tool_name,
+                            user_utterance=_last_user_text(),
+                            tts_backend=tts_backend,
+                        )
+                    except Exception as e:
+                        sp.update(level="WARNING", status_message=str(e))
+                        logger.warning(f"[filler:progress] generator raised: {e}")
+                        phrase = None
+                    if phrase:
+                        sp.update(output=phrase)
+                        logger.info(f"[filler:progress] {phrase!r}")
+                        await task.queue_frame(
+                            TTSSpeakFrame(phrase, append_to_context=False)
+                        )
         except asyncio.CancelledError:
             pass
 

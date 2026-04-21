@@ -61,6 +61,12 @@ class LocalKokoroTTS(TTSService):
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
         if not text.strip():
             return
+        from agent import tracing
+        tts_span = tracing.active_trace().span(
+            name="tts.kokoro",
+            input={"text_len": len(text), "preview": text[:120]},
+            metadata={"backend": "kokoro", "voice": self._voice},
+        )
         try:
             await self.start_tts_usage_metrics(text)
             pipe = _get_pipe(self._lang)
@@ -85,8 +91,12 @@ class LocalKokoroTTS(TTSService):
                     context_id=context_id,
                 )
         except Exception as e:
+            tts_span.update(level="ERROR", status_message=str(e))
             logger.exception("Kokoro synth failed")
             yield ErrorFrame(error=f"Kokoro TTS failed: {e}")
+        finally:
+            try: tts_span.end()
+            except Exception: pass
 
 
 def prewarm() -> None:

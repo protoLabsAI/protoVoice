@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import contextmanager
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -394,3 +395,27 @@ def active_trace() -> Any:
     if t is None or not hasattr(t, "get_current_trace"):
         return _NULL
     return t.get_current_trace()
+
+
+@contextmanager
+def span(name: str, **span_kwargs: Any):
+    """Context manager for a span on the currently active turn trace.
+
+    Usage:
+
+        with tracing.span("stt.whisper", input={"sr": 16000}) as sp:
+            result = transcribe(audio)
+            sp.update(output=_preview(result))
+
+    Yields a _NullSpan when tracing is off or no trace is live; all
+    `.update()` / `.end()` calls no-op. Callers never need an
+    `if enabled()` guard.
+    """
+    sp = active_trace().span(name=name, **span_kwargs)
+    try:
+        yield sp
+    finally:
+        try:
+            sp.end()
+        except Exception as e:
+            logger.warning(f"[tracing] span.end('{name}') failed: {e}")

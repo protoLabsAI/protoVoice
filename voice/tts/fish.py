@@ -73,6 +73,14 @@ class FishAudioTTS(TTSService):
         if not text.strip():
             return
 
+        # Defer tracing import — this file is deep in the hot path.
+        from agent import tracing
+        tts_span = tracing.active_trace().span(
+            name="tts.fish",
+            input={"text_len": len(text), "preview": text[:120]},
+            metadata={"backend": "fish", "voice": self._reference_id},
+        )
+
         payload: dict = {
             "text": text,
             "format": "wav",
@@ -128,11 +136,16 @@ class FishAudioTTS(TTSService):
                     context_id=context_id,
                 )
         except httpx.HTTPError as e:
+            tts_span.update(level="ERROR", status_message=f"http: {e}")
             logger.exception("Fish TTS HTTP error")
             yield ErrorFrame(error=f"Fish TTS HTTP error: {e}")
         except Exception as e:
+            tts_span.update(level="ERROR", status_message=str(e))
             logger.exception("Fish TTS failed")
             yield ErrorFrame(error=f"Fish TTS failed: {e}")
+        finally:
+            try: tts_span.end()
+            except Exception: pass
 
     async def stop(self, frame):
         await self._client.aclose()
