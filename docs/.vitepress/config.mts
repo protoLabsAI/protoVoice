@@ -65,6 +65,8 @@ export default defineConfig({
             { text: "Tools", link: "/reference/tools" },
             { text: "Delegates", link: "/reference/delegates" },
             { text: "Memory", link: "/reference/memory" },
+            { text: "Tracing", link: "/reference/tracing" },
+            { text: "Tracing Contract", link: "/reference/tracing-contract" },
             { text: "Metrics", link: "/reference/metrics" },
           ],
         },
