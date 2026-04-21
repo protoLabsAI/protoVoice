@@ -27,14 +27,20 @@ UI at `http://localhost:7866`. Browsers require HTTPS for mic access on non-loca
 
 ## What you get
 
-- **Pipecat pipeline** — WebRTC, VAD, streaming STT → LLM → TTS, barge-in
-- **Inline preamble** — the router LLM speaks "hmm, let me check" *before* calling a tool, in the same response stream (no second LLM call, no race conditions). Details in [natural-fillers](https://protolabsai.github.io/protoVoice/explanation/natural-fillers/).
-- **Delegates** — a single `delegate_to(target, query)` tool covering both A2A agents AND OpenAI-compatible LLM endpoints. Configured in `config/delegates.yaml`; the LLM picks targets by the descriptions you write.
-- **Async tools** — `slow_research`-style work can return later; pipecat injects the result as a developer message when ready, and the LLM speaks it at the next pipeline opportunity.
+- **Pipecat pipeline** — WebRTC, VAD, streaming STT → LLM → TTS.
+- **Adaptive barge-in** — VAD-fired interrupts go through a 350 ms grace window that rejects coughs / backchannels / brief noise; real interruptions still fire, just confirmed. Based on LiveKit production data: ~51 % of raw VAD-triggered barges are false positives.
+- **Natural fillers layered** — inline LLM-emitted preamble ("hmm, let me check") before every tool call, two-tier "still working" cadence (~2 s / ~8 s) for slow tools, generative mid-user backchannels ("mm-hmm"), micro-ack injector ("mm") if the pipeline hasn't produced audio within 500 ms. Details in [natural-fillers](https://protolabsai.github.io/protoVoice/explanation/natural-fillers/).
+- **Fish prosody pipeline** — Fish S2-Pro consumes `[softly]` / `[pause:300]` / `[hmm]` tags natively as prosody control; Kokoro / OpenAI strip via pipecat's `text_filters=`. Context stays clean via a tail-end `ProsodyTagStripper`. Research-backed: fillers alone read fake, fillers + ~300 ms pauses cross the uncanny valley (Sesame CSM).
+- **Delegates** — unified `delegate_to(target, query)` tool. A2A delegates get SSE streaming via `message/stream` with progress narration back through the voice pipeline; OpenAI-compat endpoints use non-streaming chat completions. Configured in `config/delegates.yaml`; the LLM picks targets by their descriptions.
+- **Delivery policies** — async-tool results route via `Priority` (critical / time_sensitive / active / passive) → `NOW` / `NEXT_SILENCE` / `WHEN_ASKED`. Bid-then-drain when ≥ 2 queued ("I've got updates from ava and slow_research — want them?"). Utility-gated drop past 3 items. Source attribution ("ava says — …").
+- **A2A push-back** — spec-compliant `/a2a/push` webhook accepts callbacks from delegated agents; outbound `pushNotificationConfig` (env: `A2A_PUSH_URL` + `A2A_PUSH_TOKEN`) attached on each dispatch so remote agents can push progress / terminal state back even if the SSE stream drops. Priority-mapped by event type (`input-required` → interrupt, terminal → next-silence, mid-task status → wait-for-ask).
+- **Reconnect replay** — if `slow_research` finishes after disconnect, or an A2A push arrives while you're offline, payloads stash under the skill slug and replay on the next connect via the bid-then-drain UX.
+- **Context summarization** — pipecat's built-in `LLMContextSummarizer` auto-compresses once token (default 8 k) or message (20) thresholds hit.
+- **Session-open memory callback** — rolling summary persists across WebRTC disconnects; next session may open with "hey, last time we were working through X…" if it fits naturally. Sesame CSM pattern.
+- **Prompt-driven agentic behaviour** — ≥ 3-step requests get a spoken plan preamble (CHI 2025); user pushback triggers acknowledge → reframe → offer repair (ACL 2025); tool results target 18-25 words + follow-up offer, not prose dumps (CHI 2025).
 - **Voice cloning in-browser** — upload a 10-30 s clip, auto-transcribed by Whisper, saved on Fish Audio, registered as a new skill. Instant new voice, no restart.
 - **Personas & skills** — `config/SOUL.md` + `config/skills/*.yaml` for swappable personas with per-skill TTS voice, LLM tuning, and tool restrictions.
-- **A2A both ways** — outbound via `delegate_to`; inbound via `/a2a` JSON-RPC so other fleet agents can call *us* (text-only).
-- **Sliding-window memory** — with background LLM summarization when context grows.
+- **A2A inbound** — `/a2a` JSON-RPC so other fleet agents can call *us* (text-only); `/a2a/push` for spec-conformant callback receipts.
 - **Pluggable backends** — STT and TTS both swappable via env (`STT_BACKEND=local|openai`, `TTS_BACKEND=fish|kokoro|openai`). Run fully API-backed via LocalAI, LiteLLM, OpenAI — no GPU on the protovoice container needed. See the [use-localai guide](https://protolabsai.github.io/protoVoice/guides/use-localai/).
 
 ## Stack defaults
