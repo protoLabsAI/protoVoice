@@ -131,8 +131,13 @@ const fragmentShader = /* glsl */ `
       vec3 samplePoint = origin + currentDepth * dir;
       fieldVal = evaluateStructure(samplePoint);
       float vSq = fieldVal * fieldVal;
-      float gradientBlend = smoothstep(0.0, 0.4, fieldVal);
-      vec3 currentGradient = mix(uSecondaryColor, uPrimaryColor, gradientBlend);
+      // Wider gradient: secondary reads in the outer shell, primary in the mid,
+      // a gentle hot highlight past 0.55 keeps the core feeling "energized."
+      float g1 = smoothstep(0.05, 0.55, fieldVal);
+      float g2 = smoothstep(0.45, 0.95, fieldVal);
+      vec3 base = mix(uSecondaryColor, uPrimaryColor, g1);
+      vec3 hot  = mix(uPrimaryColor, uPrimaryColor * 1.25 + uSecondaryColor * 0.15, g2);
+      vec3 currentGradient = mix(base, hot, g2 * 0.5);
       vec3 emission = currentGradient * (fieldVal * 1.8 + vSq * 1.0);
       finalEnergy = 0.99 * finalEnergy + (0.08 * uDensity) * emission;
     }
@@ -186,6 +191,7 @@ const atmosphereVertexShader = /* glsl */ `
 
 const atmosphereFragmentShader = /* glsl */ `
   uniform vec3 uColor;
+  uniform vec3 uColorSecondary;
   uniform float uGlow;
   uniform float uLevel;
   uniform vec3 uClickDir;
@@ -202,11 +208,17 @@ const atmosphereFragmentShader = /* glsl */ `
     float centerFade = smoothstep(1.0, innerFadePoint, vdn);
     float alpha = edgeFade * centerFade * uGlow;
 
-    // Click bloom — amplify halo on the clicked hemisphere.
+    // Radial halo gradient — secondary at the limb, primary pushing inward.
+    float gradT = smoothstep(0.05, 0.65, vdn);
+    vec3 haloColor = mix(uColorSecondary, uColor, gradT);
+
+    // Click bloom — amplify halo on the clicked hemisphere AND pull the
+    // color toward pure primary so the lit area reads hotter.
     float clickBoost = smoothstep(0.0, 1.0, dot(normalize(vLocalPos), uClickDir)) * uClickStrength;
     alpha *= (1.0 + clickBoost * 2.5);
+    haloColor = mix(haloColor, uColor * 1.2, clickBoost * 0.6);
 
-    gl_FragColor = vec4(uColor, alpha);
+    gl_FragColor = vec4(haloColor, alpha);
   }
 `;
 
@@ -242,9 +254,13 @@ const ChromaticAberrationShader = {
 // voice onsets; slow release spans the gaps between syllables so the state
 // machine doesn't flip on every breath. Bot envelope releases faster so the
 // speaking pump decays naturally when the bot stops talking.
-const ENV_STAGE2 = 0.25;
-const ENV_USER = { attack: 0.35, release: 0.04 };  // slow release → state-stable
-const ENV_BOT  = { attack: 0.30, release: 0.12 };  // faster → pump settles
+const ENV_STAGE2 = 0.22;
+const ENV_USER = { attack: 0.22, release: 0.04 };  // smoother user onsets
+const ENV_BOT  = { attack: 0.25, release: 0.10 };  // smoother AI pump
+
+// A third "display" smoother on top of the envelope. Kills the last bit of
+// judder before values hit uniforms — one-pole EMA per frame. Lower = smoother.
+const DISP_ALPHA = 0.10;
 
 // Byte-domain RMS scaling. Silence is ~0.003, shouting peaks ~0.35.
 const NORM_FLOOR = 0.020;
@@ -426,6 +442,7 @@ export class VoiceOrb {
 
     this.atmosphereUniforms = {
       uColor: { value: new THREE.Color(this.basePreset.primaryEnergy) },
+      uColorSecondary: { value: new THREE.Color(this.basePreset.secondaryEnergy) },
       uGlow: { value: this.basePreset.atmosphereGlow },
       uLevel: { value: this.basePreset.atmosphereLevel },
       uClickDir: this.uniforms.uClickDir,       // shared — set once, read twice
@@ -461,6 +478,8 @@ export class VoiceOrb {
       local: new Envelope(ENV_USER),
       remote: new Envelope(ENV_BOT),
     };
+    // Third-stage display smoothing — the actual values the shader sees.
+    this._disp = { bot: 0, user: 0 };
 
     // State machine.
     this.state = 'idle';
@@ -715,26 +734,33 @@ export class VoiceOrb {
                  + 0.5 * Math.sin(tSec * Math.PI * 2 * BREATH_HZ_2);
     const breathNorm = breath * 0.5;  // into roughly [-0.75, 0.75]
 
+    // ---- Display smoothing: final EMA before values hit uniforms --------
+    this._disp.bot  = lerp(this._disp.bot,  bot,  DISP_ALPHA);
+    this._disp.user = lerp(this._disp.user, user, DISP_ALPHA);
+    const dBot  = this._disp.bot;
+    const dUser = this._disp.user;
+
     // ---- Compose final uniforms: state-base + audio modulation ----------
     const s = this._stateSnap;
 
-    // Density/glow/CA get audio pump (bot dominant, small mic nudge for asym).
-    const audioPump = bot;
-    this.uniforms.uDensity.value           = s.density + audioPump * 1.6;
-    this.uniforms.uAsymmetry.value         = clamp01(s.asymmetry + user * 0.25);
-    this.uniforms.uInternalAnim.value      = s.internalAnim * (1 + audioPump * 0.35);
-    this.atmosphereUniforms.uGlow.value    = s.glow + audioPump * 1.8;
-    this.caPass.uniforms.uAmount.value     = Math.min(0.05, s.ca + audioPump * 0.012);
+    // Multipliers deliberately soft — the orb should breathe with the voice,
+    // not pulse to every transient. Too strong = jitter; too weak = dead.
+    this.uniforms.uDensity.value           = s.density + dBot * 0.9;
+    this.uniforms.uAsymmetry.value         = clamp01(s.asymmetry + dUser * 0.15);
+    this.uniforms.uInternalAnim.value      = s.internalAnim * (1 + dBot * 0.18);
+    this.atmosphereUniforms.uGlow.value    = s.glow + dBot * 1.1 + dUser * 0.35;
+    this.caPass.uniforms.uAmount.value     = Math.min(0.05, s.ca + dBot * 0.008);
 
-    // Color: state already encodes saturation/luminance. Push directly.
+    // Colors — state encodes saturation/luminance; push directly.
     this.uniforms.uPrimaryColor.value.copy(s.primary);
     this.uniforms.uSecondaryColor.value.copy(s.secondary);
     this.atmosphereUniforms.uColor.value.copy(s.primary);
+    this.atmosphereUniforms.uColorSecondary.value.copy(s.secondary);
 
-    // Scale = state scale × (1 + breath) × (1 + audio pump).
+    // Scale = state × breath × gentle audio pump.
     const scale = s.scale
                   * (1 + breathNorm * BREATH_AMP)
-                  * (1 + audioPump * 0.10);
+                  * (1 + dBot * 0.06);
     this.orb.scale.setScalar(scale);
 
     // Time + rotation integrate by delta (continuous, no smoothing needed).
