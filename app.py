@@ -307,8 +307,11 @@ async def text_agent(message: str, session_id: str) -> str:
     skill = _active_skill()
     history = _A2A_CONTEXTS.setdefault(session_id, [])
     history.append({"role": "user", "content": message})
+    # Text path uses the same voice-tuned prompt, including the TOOL USE /
+    # response / plan / repair blocks. Backend label selects the prosody
+    # hint; text consumers ignore tags so either value is safe.
     messages = [
-        {"role": "system", "content": _effective_prompt(skill)},
+        {"role": "system", "content": _effective_prompt(skill, TTS_BACKEND)},
         *history[-(_A2A_MAX_TURNS * 2):],
     ]
     r = await _get_text_client().chat.completions.create(

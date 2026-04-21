@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from agent.delivery import DeliveryController, DeliveryPolicy, Priority
 
@@ -99,6 +99,15 @@ def _auth_ok(request: Request) -> bool:
     return False
 
 
+def _sse_event(payload: dict) -> str:
+    """Format a JSON-RPC response object as an SSE `data:` line.
+    Per A2A streaming spec (https://a2a-protocol.org/latest/topics/streaming-and-async/)
+    each event is a single line of JSON prefixed with `data:` and
+    followed by a blank line."""
+    import json as _json
+    return f"data: {_json.dumps(payload)}\n\n"
+
+
 def _jsonrpc_error(rpc_id: Any, code: int, message: str, status: int = 400) -> JSONResponse:
     return JSONResponse(
         status_code=status,
@@ -151,7 +160,7 @@ def register_a2a_routes(
         rpc_id = body.get("id")
         method = body.get("method")
 
-        if method != "message/send":
+        if method not in ("message/send", "message/stream"):
             return _jsonrpc_error(
                 rpc_id, -32601, f"Unknown method: {method!r}", status=400
             )
@@ -163,7 +172,8 @@ def register_a2a_routes(
 
         context_id = params.get("contextId") or str(uuid.uuid4())
         session_id = f"a2a:{context_id}"
-        logger.info(f'[a2a/in] {context_id[:8]}… "{user_text[:80]}"')
+        task_id = str(uuid.uuid4())
+        logger.info(f'[a2a/in:{method}] {context_id[:8]}… "{user_text[:80]}"')
 
         # Cross-fleet trace continuation — if the caller attached our
         # contract headers, pick up their trace so their request nests
@@ -179,13 +189,75 @@ def register_a2a_routes(
             )
             logger.info(f"[a2a/in] continuing caller trace {caller_trace_id[:8]}…")
 
+        # --- Streaming path (message/stream → SSE) ------------------------
+        if method == "message/stream":
+            async def _stream_events():
+                # Initial "working" status so the caller knows we started.
+                yield _sse_event({
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "result": {
+                        "kind": "task-status-update",
+                        "taskId": task_id,
+                        "contextId": context_id,
+                        "status": {"state": "working"},
+                        "final": False,
+                    },
+                })
+                try:
+                    reply = await text_agent(user_text, session_id)
+                except Exception as e:
+                    logger.exception("[a2a/in:stream] text_agent raised")
+                    yield _sse_event({
+                        "jsonrpc": "2.0", "id": rpc_id,
+                        "error": {"code": -32000, "message": f"agent error: {e}"},
+                    })
+                    return
+                finally:
+                    if inbound_trace is not None:
+                        _trc.flush()
+                # Artifact update carrying the reply text.
+                yield _sse_event({
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "result": {
+                        "kind": "task-artifact-update",
+                        "taskId": task_id,
+                        "contextId": context_id,
+                        "artifact": {
+                            "artifactId": str(uuid.uuid4()),
+                            "parts": [{"kind": "text", "text": reply}],
+                        },
+                        "append": False,
+                        "lastChunk": True,
+                    },
+                })
+                # Terminal status closes the stream.
+                yield _sse_event({
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "result": {
+                        "kind": "task-status-update",
+                        "taskId": task_id,
+                        "contextId": context_id,
+                        "status": {"state": "completed"},
+                        "final": True,
+                    },
+                })
+
+            return StreamingResponse(
+                _stream_events(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        # --- Non-streaming path (message/send) ----------------------------
         try:
             reply = await text_agent(user_text, session_id)
         except Exception as e:
             logger.exception("[a2a/in] text_agent raised")
             return _jsonrpc_error(rpc_id, -32000, f"agent error: {e}", status=500)
         finally:
-            # Flush early so the caller sees our spans quickly.
             if inbound_trace is not None:
                 _trc.flush()
 
@@ -194,7 +266,7 @@ def register_a2a_routes(
                 "jsonrpc": "2.0",
                 "id": rpc_id,
                 "result": {
-                    "id": str(uuid.uuid4()),
+                    "id": task_id,
                     "contextId": context_id,
                     "status": {"state": "completed"},
                     "artifacts": [
