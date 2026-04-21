@@ -28,11 +28,19 @@ Either threshold alone fires a summary — use whichever shape matters for your 
 - **Multiple triggers stacking** — pipecat's summarizer has an internal in-progress guard (`_summarization_in_progress`); subsequent triggers are no-ops until the first completes.
 - **Summary is wrong / hallucinates** — you'll hear it on the next tool-less turn. Tune `MEMORY_TARGET_CONTEXT_TOKENS` lower (more aggressive) or turn it off with `MEMORY_SUMMARIZE=0`.
 
+## Cross-session persistence (session-open callbacks)
+
+When pipecat's summarizer emits `on_summary_applied`, the rolling summary is also written to `{SESSION_STORE_DIR}/{skill_slug}.txt` (default `/tmp/protovoice_sessions/`). At the start of the NEXT session with the same skill, `_effective_prompt` injects a one-paragraph recall block:
+
+> Last time the user and this persona spoke, it went roughly: …
+> IF it fits naturally, acknowledge this in your first turn …
+
+Sesame CSM research ([Crossing the Uncanny Valley of Voice](https://www.sesame.com/research/crossing_the_uncanny_valley_of_voice)): memory callbacks at session-open boost "presence" ratings; mid-turn recall is rated "creepy." The prompt explicitly asks the LLM to only callback if it fits — otherwise ignore.
+
 ## Intentional non-features
 
-- **No persistence across sessions** (yet — `C14` in the roadmap adds reconnect replay).
+- **No per-user keying.** Single-user homelab today — one summary file per skill, not per user. Multi-tenant keying is future work.
 - **No semantic recall.** No vector search. Just a rolling summary + recent window.
-- **No per-user memory.** Module-level singleton pipeline ties memory to the connection. Multi-tenant would refactor this.
 
 ## Observing it
 

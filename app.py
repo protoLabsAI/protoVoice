@@ -98,6 +98,7 @@ from agent.filler import (
     tool_response_block,
     tool_use_block,
 )
+from agent.session_store import load_last_summary, save_summary
 from agent.tools import ASYNC_TOOL_NAMES, latency_for, register_tools
 from skills.loader import load_skills, write_voice_clone_skill
 from skills.models import DEFAULT_SOUL_SLUG, Skill
@@ -228,6 +229,11 @@ def _effective_prompt(skill: Skill, tts_backend: str) -> str:
     """
     base = _SYSTEM_PROMPT_ENV_OVERRIDE or skill.system_prompt
     plan = plan_block(_FILLER.verbosity)
+    # Sesame CSM finding: session-open memory callbacks boost "presence";
+    # mid-turn recall reads as creepy. If we have a saved summary from the
+    # previous session with this skill, inject one nudge and let the LLM
+    # decide whether to reference it naturally.
+    recall = _recall_block(skill.slug)
     return (
         base
         + "\n\n"
@@ -237,7 +243,24 @@ def _effective_prompt(skill: Skill, tts_backend: str) -> str:
         + (("\n\n" + plan) if plan else "")
         + "\n\n"
         + repair_block()
+        + (("\n\n" + recall) if recall else "")
     )
+
+
+def _recall_block(skill_slug: str) -> str:
+    summary = load_last_summary(skill_slug)
+    if not summary:
+        return ""
+    return f"""\
+## MEMORY — from the last session
+
+Last time the user and this persona spoke, it went roughly: {summary}
+
+IF it fits naturally, acknowledge this in your first turn of the new
+session — e.g. "hey, last time we were working through X, any update?"
+Only if the user's first message lines up with the topic. Otherwise
+IGNORE this block completely; do not force a callback.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -438,6 +461,21 @@ async def run_bot(webrtc_connection) -> None:
             auto_context_summarization_config=_summary_config,
         ),
     )
+
+    # Persist the rolling summary whenever it gets applied so the next
+    # session can open with a natural "last time we…" callback.
+    @assistant_agg.event_handler("on_summary_applied")
+    async def _on_summary_applied(_agg, _summarizer, _event) -> None:
+        # The latest summary is the first system message in the context
+        # that isn't the persona's SOUL prompt. Pipecat's summarizer
+        # inserts / updates it in-place.
+        for msg in context.messages:
+            if msg.get("role") != "system":
+                continue
+            content = msg.get("content") or ""
+            if isinstance(content, str) and content and content != skill.system_prompt:
+                save_summary(skill.slug, content)
+                return
 
     pipeline = Pipeline([
         transport.input(),
