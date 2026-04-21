@@ -4,93 +4,134 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>protoVoice</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
   <style>
     :root { color-scheme: dark; }
+    html, body { height: 100%; }
     body {
-      margin: 0; min-height: 100vh; display: grid; place-items: center;
-      background: #0a0f14; color: #e2e8f0;
+      margin: 0; min-height: 100vh; background: #000; color: #e2e8f0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
     }
-    main { text-align: center; padding: 2rem; }
-    h1 { color: #5eead4; font-weight: 500; letter-spacing: -0.02em; }
-    p { opacity: 0.7; margin: 0.5rem 0 2rem; }
+    #viz {
+      position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    }
+    #viz canvas { display: block; width: 100% !important; height: 100% !important; }
+    main {
+      position: relative; z-index: 10;
+      min-height: 100vh; display: grid; place-items: end center;
+      padding: 2rem; box-sizing: border-box; pointer-events: none;
+    }
+    main > * { pointer-events: auto; }
+    .panel {
+      background: rgba(10, 15, 20, 0.55);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      border-radius: 1rem;
+      padding: 1.5rem 2rem;
+      text-align: center;
+      max-width: 34rem; width: 100%;
+    }
+    h1 { margin: 0; color: #5eead4; font-weight: 500; letter-spacing: -0.02em; font-size: 1.4rem; }
+    p { opacity: 0.7; margin: 0.25rem 0 1.25rem; font-size: 0.9rem; }
     button {
       background: #14b8a6; color: #fff; border: 0; border-radius: 999px;
-      padding: 1rem 2rem; font-size: 1rem; cursor: pointer;
+      padding: 0.75rem 1.75rem; font-size: 1rem; cursor: pointer;
       transition: background .15s;
     }
     button:hover { background: #0d9488; }
     button:disabled { background: #475569; cursor: not-allowed; }
-    #status { margin-top: 1.5rem; font-size: 0.85rem; opacity: 0.6; min-height: 1.2em; }
-    audio { margin-top: 1rem; }
-    .controls { margin-top: 1.5rem; font-size: 0.85rem; opacity: 0.7; }
-    .controls label { margin-right: 0.5rem; }
+    #status { margin-top: 1rem; font-size: 0.8rem; opacity: 0.6; min-height: 1.2em; }
+    audio { display: none; }
+    .controls { margin-top: 1rem; font-size: 0.85rem; opacity: 0.85; display: flex;
+      gap: 0.75rem; justify-content: center; flex-wrap: wrap; align-items: center; }
+    .controls label { opacity: 0.7; }
     select, input[type=text], input[type=file], textarea {
-      background: #162030; color: #e2e8f0;
+      background: rgba(22, 32, 48, 0.85); color: #e2e8f0;
       border: 1px solid rgba(20, 184, 166, 0.35); border-radius: 0.5rem;
       padding: 0.3rem 0.5rem; font-size: 0.85rem;
     }
     select:focus, input:focus, textarea:focus { outline: 0; border-color: #14b8a6; }
-    details {
-      margin-top: 1.5rem; font-size: 0.85rem; opacity: 0.9;
-      text-align: left; max-width: 32rem; margin-left: auto; margin-right: auto;
-    }
+    details { margin-top: 1rem; font-size: 0.85rem; text-align: left; }
     details summary { cursor: pointer; opacity: 0.7; padding: 0.25rem 0; }
     details summary:hover { opacity: 1; }
-    .clone-form { display: grid; gap: 0.5rem; margin-top: 0.75rem; padding: 0.75rem;
-      background: #0f1620; border-radius: 0.5rem; border: 1px solid rgba(20,184,166,0.15); }
+    .clone-form { display: grid; gap: 0.5rem; margin-top: 0.5rem; padding: 0.75rem;
+      background: rgba(15, 22, 32, 0.8); border-radius: 0.5rem;
+      border: 1px solid rgba(20,184,166,0.15); }
     .clone-form textarea { resize: vertical; min-height: 3em; }
-    .clone-form button {
-      margin-top: 0.25rem; padding: 0.5rem 1rem; font-size: 0.9rem;
-    }
+    .clone-form button { margin-top: 0.25rem; padding: 0.5rem 1rem; font-size: 0.9rem; }
     .clone-status { font-size: 0.8rem; opacity: 0.6; min-height: 1.2em; }
   </style>
 </head>
 <body>
+  <div id="viz"></div>
   <main>
-    <h1>protoVoice</h1>
-    <p>Click, speak, listen.</p>
-    <button id="btn">Start</button>
-    <div id="status"></div>
-    <audio id="audio" autoplay></audio>
-    <div class="controls">
-      <label for="skill" title="Applies on next Start">Skill:</label>
-      <select id="skill" title="Applies on next Start"></select>
-      &nbsp;
-      <label for="verbosity">Verbosity:</label>
-      <select id="verbosity">
-        <option value="silent">silent</option>
-        <option value="brief" selected>brief</option>
-        <option value="narrated">narrated</option>
-        <option value="chatty">chatty</option>
-      </select>
-    </div>
+    <div class="panel">
+      <h1>protoVoice</h1>
+      <p>Click, speak, listen.</p>
+      <button id="btn">Start</button>
+      <div id="status"></div>
+      <audio id="audio" autoplay></audio>
+      <div class="controls">
+        <label for="skill" title="Applies on next Start">Skill</label>
+        <select id="skill" title="Applies on next Start"></select>
+        <label for="verbosity">Verbosity</label>
+        <select id="verbosity">
+          <option value="silent">silent</option>
+          <option value="brief" selected>brief</option>
+          <option value="narrated">narrated</option>
+          <option value="chatty">chatty</option>
+        </select>
+        <label for="viz-preset">Visual</label>
+        <select id="viz-preset">
+          <option value="Default" selected>Default</option>
+          <option value="Cyan">Cyan</option>
+          <option value="Gray">Gray</option>
+          <option value="Yellow">Yellow</option>
+          <option value="Green">Green</option>
+        </select>
+      </div>
 
-    <details>
-      <summary>+ Clone a new voice</summary>
-      <form class="clone-form" id="clone-form">
-        <label>Audio sample (10-30s recommended)
-          <input type="file" id="clone-audio" accept="audio/*" required>
-        </label>
-        <label>Slug (lowercase letters / digits / hyphens)
-          <input type="text" id="clone-slug" placeholder="e.g. alex" required pattern="[a-z0-9][a-z0-9\-_]{1,63}">
-        </label>
-        <label>Display name (optional)
-          <input type="text" id="clone-name" placeholder="e.g. Alex">
-        </label>
-        <label>Transcript (leave empty to auto-transcribe via Whisper)
-          <textarea id="clone-transcript" placeholder="Exactly what the clip says. Accuracy matters for voice quality."></textarea>
-        </label>
-        <label>Description (optional)
-          <input type="text" id="clone-description" placeholder="e.g. Voice-cloned Alex">
-        </label>
-        <button type="submit">Clone voice</button>
-        <div class="clone-status" id="clone-status"></div>
-      </form>
-    </details>
+      <details>
+        <summary>+ Clone a new voice</summary>
+        <form class="clone-form" id="clone-form">
+          <label>Audio sample (10-30s recommended)
+            <input type="file" id="clone-audio" accept="audio/*" required>
+          </label>
+          <label>Slug (lowercase letters / digits / hyphens)
+            <input type="text" id="clone-slug" placeholder="e.g. alex" required pattern="[a-z0-9][a-z0-9\-_]{1,63}">
+          </label>
+          <label>Display name (optional)
+            <input type="text" id="clone-name" placeholder="e.g. Alex">
+          </label>
+          <label>Transcript (leave empty to auto-transcribe via Whisper)
+            <textarea id="clone-transcript" placeholder="Exactly what the clip says. Accuracy matters for voice quality."></textarea>
+          </label>
+          <label>Description (optional)
+            <input type="text" id="clone-description" placeholder="e.g. Voice-cloned Alex">
+          </label>
+          <button type="submit">Clone voice</button>
+          <div class="clone-status" id="clone-status"></div>
+        </form>
+      </details>
+    </div>
   </main>
 
-  <script>
+  <script type="module">
+    import { VoiceOrb } from '/static/viz.js';
+
+    // Mount the visualizer immediately — idle orb before any session starts.
+    const orb = new VoiceOrb(document.getElementById('viz'), { preset: 'Default' });
+    window.__orb = orb; // handy for console tweaking
+
     // WebRTC mechanics match pipecat's canonical p2p-webrtc example:
     //   - both audio AND video transceivers (SmallWebRTCTransport requires it)
     //   - trickle ICE with a pc_id-gated queue so candidates don't 404
@@ -136,7 +177,10 @@
       pc.canSendIceCandidates = false;
 
       pc.ontrack = (e) => {
-        if (e.track.kind === "audio") audioEl.srcObject = e.streams[0];
+        if (e.track.kind === "audio") {
+          audioEl.srcObject = e.streams[0];
+          orb.attachStream(e.streams[0], 'remote');
+        }
       };
       pc.onconnectionstatechange = () => {
         setStatus(pc.connectionState);
@@ -157,6 +201,9 @@
       // offer, even in an audio-only app. Omitting video breaks DTLS/SCTP.
       pc.addTransceiver(localStream.getAudioTracks()[0], { direction: "sendrecv" });
       pc.addTransceiver("video", { direction: "sendrecv" });
+
+      // Hook the visualizer to the local mic for user-speech energy.
+      orb.attachStream(localStream, 'local');
 
       await pc.setLocalDescription(await pc.createOffer());
       setStatus("negotiating...");
@@ -186,6 +233,8 @@
       if (pc) { pc.close(); pc = null; }
       if (localStream) { for (const t of localStream.getTracks()) t.stop(); localStream = null; }
       audioEl.srcObject = null;
+      orb.detachStream('local');
+      orb.detachStream('remote');
       btn.textContent = "Start";
       btn.onclick = start;
       btn.disabled = false;
@@ -207,6 +256,10 @@
         body: JSON.stringify({ level: verbEl.value }),
       });
     });
+
+    // Visualizer preset — purely client-side.
+    const vizEl = document.getElementById("viz-preset");
+    vizEl.addEventListener("change", () => orb.setPreset(vizEl.value));
 
     // Skill dropdown — populated from /api/skills. Change-of-skill applies
     // to the NEXT connect, not mid-session; the label hints that.
