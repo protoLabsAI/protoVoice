@@ -71,6 +71,7 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from a2a.server import register_a2a_routes
 from agent.backchannel import BackchannelController
+from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
 from agent.echo_guard import (
     ECHO_GUARD_MS,
@@ -80,6 +81,7 @@ from agent.echo_guard import (
     EchoGuardSuppressor,
 )
 from agent.delivery import DeliveryController
+from agent.prosody import ProsodyTagStripper
 from agent.filler import (
     FillerGenerator,
     Latency,
@@ -411,13 +413,27 @@ async def run_bot(webrtc_connection) -> None:
         EchoGuardSuppressor(_ECHO_STATE),
         stt,
         user_agg,
-        # Both placed after user_agg — they need TranscriptionFrames and
+        # Adaptive barge-in gate — suppresses VAD-triggered interrupts
+        # that resolve within the grace window as coughs / backchannels /
+        # background noise. Real interrupts still fire, just confirmed.
+        BargeInGate(),
+        # Both placed after the gate — they need TranscriptionFrames and
         # VAD frames produced by the aggregator. Push downstream into TTS.
         backchannel,
         delivery,
         llm,
+        # Backends that can't consume prosody tags need them stripped
+        # before the TTS call; Fish consumes `[softly]` / `[pause:300]`
+        # directly as control tokens, so pass those through.
+        *([ProsodyTagStripper()] if tts_backend != "fish" else []),
         tts,
         transport.output(),
+        # Strip Fish-style prosody tags ([softly], [pause:300ms], …) from
+        # TextFrames BEFORE the assistant aggregator sees them, so tags
+        # don't accumulate in LLM context for future turns. Fish has
+        # already spoken the tags; Kokoro/OpenAI strip them at the adapter
+        # level. This is the context-safety net.
+        ProsodyTagStripper(),
         assistant_agg,
         # Memory sits at the tail so it observes LLMFullResponseEndFrame on
         # each turn and prunes/summarizes asynchronously without blocking.

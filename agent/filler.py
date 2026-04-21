@@ -57,9 +57,18 @@ DEFAULT_VERBOSITY = Verbosity(os.environ.get("VERBOSITY", Verbosity.BRIEF.value)
 _FISH_STYLE = """\
 You may use Fish Audio S2-Pro inline prosody tags to sound natural.
 Preferred tags for thinking-out-loud:
-  [softly], [pause], [hmm], [um], [thinking], [whisper]
-Use them sparingly — one or two per phrase, at phrase starts or pauses.
-Example: "[softly] hmm, [pause] let me check that for you"
+  [softly], [hmm], [um], [thinking], [whisper]
+Use a breath pause to separate clauses with `[pause:250]` (or 150/300/500 ms
+depending on how long the beat should be). Pauses around a filler make it
+feel human rather than performative — research shows fillers alone read as
+fake, but filler + ~300 ms pause crosses the uncanny valley. Use them
+sparingly — one filler + one pause per short reply; maybe two for longer
+answers. Place pauses at natural clause boundaries.
+
+Examples:
+  "[softly] hmm, [pause:300] let me check that for you"
+  "Sure thing. [pause:200] Looking it up now."
+  "Okay — [pause:250] pulling the latest numbers."
 """
 
 _KOKORO_STYLE = """\
