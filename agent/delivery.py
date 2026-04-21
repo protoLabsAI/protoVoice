@@ -114,6 +114,7 @@ class DeliveryController(FrameProcessor):
         priority: Priority = Priority.ACTIVE,
         policy: DeliveryPolicy | None = None,
         keywords: tuple[str, ...] = (),
+        source: str | None = None,
     ) -> None:
         """Deliver `phrase` according to its urgency.
 
@@ -125,18 +126,24 @@ class DeliveryController(FrameProcessor):
           NEXT_SILENCE  — queue; emit when the user pauses
           WHEN_ASKED    — queue; emit only when the user's transcript
                           references one of `keywords`
+
+        `source` — if provided and not our own agent, the phrase is
+        prefixed with an attribution ("ava says — …"). CHI '23 data: voice
+        attribution boosts trust after errors and makes delegated replies
+        feel less like ours to own.
         """
         priority = Priority(priority)
         effective_policy = DeliveryPolicy(policy) if policy is not None else _PRIORITY_TO_POLICY[priority]
+        attributed = _attribute(phrase, source)
         logger.info(
-            f"[delivery] enqueue priority={priority.value} policy={effective_policy.value}: "
-            f"{phrase[:60]!r}"
+            f"[delivery] enqueue priority={priority.value} policy={effective_policy.value}"
+            f"{f' source={source}' if source else ''}: {attributed[:60]!r}"
         )
         if effective_policy is DeliveryPolicy.NOW:
-            await self._emit(phrase)
+            await self._emit(attributed)
             return
         self._pending.append(
-            _Pending(phrase=phrase, policy=effective_policy, priority=priority, keywords=keywords)
+            _Pending(phrase=attributed, policy=effective_policy, priority=priority, keywords=keywords)
         )
         # If the user isn't currently speaking and there's something eligible
         # for NEXT_SILENCE, drain right away.
@@ -214,3 +221,16 @@ def _keyword_match(text: str, keywords: tuple[str, ...]) -> bool:
         return False
     low = text.lower()
     return any(k.lower() in low for k in keywords)
+
+
+def _attribute(phrase: str, source: str | None) -> str:
+    """Prefix a delivery phrase with its source if one is given and it's
+    not our own turn. Uses "{source} says — …" framing; the em-dash +
+    space prompts a natural Fish/Kokoro pause."""
+    if not source:
+        return phrase
+    # Avoid double-attributing if a caller already included the source.
+    low = phrase.lower()
+    if low.startswith(f"{source.lower()} "):
+        return phrase
+    return f"{source} says — {phrase}"

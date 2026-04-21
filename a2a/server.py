@@ -203,8 +203,9 @@ def register_a2a_routes(
             logger.info("[a2a/callback] no active voice session — result dropped")
             return {"ok": True, "delivered": False, "reason": "no active session"}
 
-        phrase = f"Heads up — {caller} got back to us. {text}"
-        await delivery.deliver(phrase, priority=Priority.TIME_SENSITIVE)
+        # Attribution is handled by DeliveryController — no need to wrap
+        # with "heads up" since "{caller} says —" does that natively.
+        await delivery.deliver(text, priority=Priority.TIME_SENSITIVE, source=caller)
         return {"ok": True, "delivered": True}
 
 
