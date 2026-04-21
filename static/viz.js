@@ -356,7 +356,6 @@ function stateSnapshot(state, base) {
         speed: base.speed * 0.7,
         ca: base.chromaticAberration * 0.4,
         asymmetry: base.asymmetry * 0.8,
-        internalAnim: base.internalAnim * 0.55,
         rotation: base.orbRotation * 0.55,
         scale: 0.94,
         primary: withHSL(base.primaryEnergy, 0.80, 0.70),
@@ -370,7 +369,6 @@ function stateSnapshot(state, base) {
         speed: base.speed * 0.65,
         ca: base.chromaticAberration * 0.6,
         asymmetry: base.asymmetry * 0.85,
-        internalAnim: base.internalAnim * 0.80,
         rotation: base.orbRotation * 0.55,
         scale: 0.93,                       // inward cue (was 0.88 — too small)
         primary: withHSL(base.primaryEnergy, 0.95, 0.95),
@@ -384,7 +382,6 @@ function stateSnapshot(state, base) {
         speed: base.speed * 1.0,
         ca: base.chromaticAberration * 0.7,
         asymmetry: base.asymmetry * 0.9,
-        internalAnim: base.internalAnim * 1.25,
         rotation: base.orbRotation * 0.85,
         scale: 0.96,
         primary: withHSL(base.primaryEnergy, 0.95, 0.90),
@@ -398,7 +395,6 @@ function stateSnapshot(state, base) {
         speed: base.speed * 1.05,
         ca: base.chromaticAberration * 1.0,
         asymmetry: base.asymmetry,
-        internalAnim: base.internalAnim * 1.0,
         rotation: base.orbRotation * 1.0,
         scale: 1.06,                       // outward cue
         primary: new THREE.Color(base.primaryEnergy),
@@ -414,7 +410,6 @@ function lerpSnapshot(a, b, t) {
     speed: lerp(a.speed, b.speed, t),
     ca: lerp(a.ca, b.ca, t),
     asymmetry: lerp(a.asymmetry, b.asymmetry, t),
-    internalAnim: lerp(a.internalAnim, b.internalAnim, t),
     rotation: lerp(a.rotation, b.rotation, t),
     scale: lerp(a.scale, b.scale, t),
     primary: a.primary.clone().lerp(b.primary, t),
@@ -644,6 +639,7 @@ export class VoiceOrb {
     this.uniforms.uFractalScale.value = p.fractalScale;
     this.uniforms.uFractalDecay.value = p.fractalDecay;
     this.uniforms.uSmoothness.value   = p.smoothness;
+    this.uniforms.uInternalAnim.value = p.internalAnim;
     this.atmosphereUniforms.uLevel.value = p.atmosphereLevel;
     this.atmosphereMesh.scale.setScalar(p.atmosphereScale);
     this.renderer.setPixelRatio(p.dpr);
@@ -668,6 +664,7 @@ export class VoiceOrb {
       case 'fractalScale':   this.uniforms.uFractalScale.value = value; return;
       case 'fractalDecay':   this.uniforms.uFractalDecay.value = value; return;
       case 'smoothness':     this.uniforms.uSmoothness.value   = value; return;
+      case 'internalAnim':   this.uniforms.uInternalAnim.value = value; return;
       case 'atmosphereLevel':this.atmosphereUniforms.uLevel.value = value; return;
       case 'atmosphereScale':this.atmosphereMesh.scale.setScalar(value); return;
       case 'dpr':
@@ -827,7 +824,8 @@ export class VoiceOrb {
     // small input jitter propagates multiplicatively through the folds and
     // reads as twitchy. Keep the user pump tiny (0.06, was 0.15).
     this.uniforms.uAsymmetry.value         = clamp01(s.asymmetry + dUser * 0.06);
-    this.uniforms.uInternalAnim.value      = s.internalAnim * (1 + dBot * 0.18);
+    // uInternalAnim is a direct user-controlled knob — no state modulation,
+    // no audio pump. Owned by setPreset/setParam.
     this.atmosphereUniforms.uGlow.value    = s.glow + dBot * 1.1 + dUser * 0.35;
     this.caPass.uniforms.uAmount.value     = Math.min(0.05, s.ca + dBot * 0.008);
 
