@@ -333,11 +333,11 @@
         <div class="field">
           <label for="viz-preset">Palette</label>
           <select id="viz-preset">
-            <option value="Default" selected>Default</option>
-            <option value="Cyan">Cyan</option>
-            <option value="Gray">Gray</option>
-            <option value="Yellow">Yellow</option>
-            <option value="Green">Green</option>
+            <option value="Aurora" selected>Aurora</option>
+            <option value="Ember">Ember</option>
+            <option value="Citrus">Citrus</option>
+            <option value="Forest">Forest</option>
+            <option value="Noir">Noir</option>
           </select>
         </div>
         <div class="field">
@@ -414,7 +414,7 @@
     import { VoiceOrb, PRESETS } from '/static/viz.js';
 
     const PALETTE_NAMES = new Set(Object.keys(PRESETS));
-    const orb = new VoiceOrb(document.getElementById('viz'), { preset: 'Default' });
+    const orb = new VoiceOrb(document.getElementById('viz'), { preset: 'Aurora' });
     window.__orb = orb;
 
     // --- Drawer toggle ---------------------------------------------------

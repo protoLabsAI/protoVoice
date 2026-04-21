@@ -12,37 +12,45 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
-// --- Presets (unchanged from the pen) ---------------------------------------
+// --- Presets — complementary palettes ---------------------------------------
+// Each pair places primary and secondary at or near 180° on the color wheel
+// so the secondary→primary gradient reads as a clean contrast through the
+// fractal shell rather than a subtle hue shift.
 export const PRESETS = {
-  Default: {
-    primaryEnergy: '#00b3ff', secondaryEnergy: '#2e9aff', speed: 0.5, density: 3.0, dpr: 0.7,
-    atmosphereGlow: 0.15, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.89,
-    internalAnim: 0.43, fractalIters: 4, fractalScale: 0.97, fractalDecay: -16.7,
-    smoothness: 0.031, asymmetry: 0.55, chromaticAberration: 0.025,
+  // Sky / pink — soft cool/warm complementary, reads as "calm tech."
+  Aurora: {
+    primaryEnergy: '#0ea5e9', secondaryEnergy: '#f472b6', speed: 0.5, density: 2.4, dpr: 0.7,
+    atmosphereGlow: 0.18, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.80,
+    internalAnim: 0.42, fractalIters: 4, fractalScale: 0.95, fractalDecay: -17.0,
+    smoothness: 0.032, asymmetry: 0.50, chromaticAberration: 0.022,
   },
-  Cyan: {
-    primaryEnergy: '#00ffee', secondaryEnergy: '#9900ff', speed: 0.5, density: 1.1, dpr: 0.7,
-    atmosphereGlow: 0.15, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.89,
-    internalAnim: 0.43, fractalIters: 3, fractalScale: 0.75, fractalDecay: -16.7,
-    smoothness: 0.05, asymmetry: 0.45, chromaticAberration: 0.026,
+  // Orange / indigo — classic fire/ice complementary, high energy.
+  Ember: {
+    primaryEnergy: '#f97316', secondaryEnergy: '#4338ca', speed: 0.6, density: 2.1, dpr: 0.7,
+    atmosphereGlow: 0.22, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.70,
+    internalAnim: 0.55, fractalIters: 4, fractalScale: 0.90, fractalDecay: -15.5,
+    smoothness: 0.028, asymmetry: 0.60, chromaticAberration: 0.026,
   },
-  Gray: {
-    primaryEnergy: '#ffffff', secondaryEnergy: '#000000', speed: 0.3, density: 0.9, dpr: 0.7,
-    atmosphereGlow: 0.15, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.46,
-    internalAnim: 0.17, fractalIters: 4, fractalScale: 0.74, fractalDecay: -21.6,
-    smoothness: 0.036, asymmetry: 0.0, chromaticAberration: 0.017,
+  // Gold / violet — pure complementary on the yellow/violet axis.
+  Citrus: {
+    primaryEnergy: '#eab308', secondaryEnergy: '#a855f7', speed: 0.55, density: 1.8, dpr: 0.7,
+    atmosphereGlow: 0.18, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.55,
+    internalAnim: 0.45, fractalIters: 3, fractalScale: 0.78, fractalDecay: -14.8,
+    smoothness: 0.014, asymmetry: 0.38, chromaticAberration: 0.022,
   },
-  Yellow: {
-    primaryEnergy: '#ffbb00', secondaryEnergy: '#2eff9d', speed: 0.5, density: 2.1, dpr: 0.7,
-    atmosphereGlow: 0.15, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.53,
-    internalAnim: 0.43, fractalIters: 3, fractalScale: 0.69, fractalDecay: -14.5,
-    smoothness: 0.008, asymmetry: 0.35, chromaticAberration: 0.024,
+  // Emerald / rose — green/magenta complementary, lush + punchy.
+  Forest: {
+    primaryEnergy: '#10b981', secondaryEnergy: '#db2777', speed: 0.9, density: 1.6, dpr: 0.7,
+    atmosphereGlow: 0.20, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.60,
+    internalAnim: 0.42, fractalIters: 4, fractalScale: 0.86, fractalDecay: -22.0,
+    smoothness: 0.060, asymmetry: 0.30, chromaticAberration: 0.006,
   },
-  Green: {
-    primaryEnergy: '#44ff00', secondaryEnergy: '#0062ff', speed: 1.1, density: 1.3, dpr: 0.7,
-    atmosphereGlow: 0.15, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.56,
-    internalAnim: 0.4, fractalIters: 4, fractalScale: 0.89, fractalDecay: -24.3,
-    smoothness: 0.081, asymmetry: 0.26, chromaticAberration: 0.0,
+  // Off-white / near-black — minimal monochrome.
+  Noir: {
+    primaryEnergy: '#e4e4e7', secondaryEnergy: '#18181b', speed: 0.35, density: 1.0, dpr: 0.7,
+    atmosphereGlow: 0.14, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.45,
+    internalAnim: 0.22, fractalIters: 4, fractalScale: 0.76, fractalDecay: -20.0,
+    smoothness: 0.034, asymmetry: 0.10, chromaticAberration: 0.016,
   },
 };
 
@@ -131,13 +139,13 @@ const fragmentShader = /* glsl */ `
       vec3 samplePoint = origin + currentDepth * dir;
       fieldVal = evaluateStructure(samplePoint);
       float vSq = fieldVal * fieldVal;
-      // Wider gradient: secondary reads in the outer shell, primary in the mid,
-      // a gentle hot highlight past 0.55 keeps the core feeling "energized."
-      float g1 = smoothstep(0.05, 0.55, fieldVal);
-      float g2 = smoothstep(0.45, 0.95, fieldVal);
-      vec3 base = mix(uSecondaryColor, uPrimaryColor, g1);
-      vec3 hot  = mix(uPrimaryColor, uPrimaryColor * 1.25 + uSecondaryColor * 0.15, g2);
-      vec3 currentGradient = mix(base, hot, g2 * 0.5);
+      // Single clean secondary→primary ramp, then a white-tipped highlight
+      // (capped at 30 %) for the densest samples. No additive overshoot.
+      float g   = smoothstep(0.05, 0.75, fieldVal);
+      float hot = smoothstep(0.70, 1.00, fieldVal);
+      vec3 baseGradient = mix(uSecondaryColor, uPrimaryColor, g);
+      vec3 hotColor = mix(uPrimaryColor, vec3(1.0), 0.30);
+      vec3 currentGradient = mix(baseGradient, hotColor, hot * 0.55);
       vec3 emission = currentGradient * (fieldVal * 1.8 + vSq * 1.0);
       finalEnergy = 0.99 * finalEnergy + (0.08 * uDensity) * emission;
     }
@@ -209,7 +217,9 @@ const atmosphereFragmentShader = /* glsl */ `
     float alpha = edgeFade * centerFade * uGlow;
 
     // Radial halo gradient — secondary at the limb, primary pushing inward.
-    float gradT = smoothstep(0.05, 0.65, vdn);
+    // Wider smoothstep = more of the ring shows the transition band, not
+    // just a hard split between the two hues.
+    float gradT = smoothstep(0.0, 0.85, vdn);
     vec3 haloColor = mix(uColorSecondary, uColor, gradT);
 
     // Click bloom — amplify halo on the clicked hemisphere AND pull the
@@ -408,7 +418,7 @@ function lerpSnapshot(a, b, t) {
 
 // --- Main class -------------------------------------------------------------
 export class VoiceOrb {
-  constructor(container, { preset = 'Default' } = {}) {
+  constructor(container, { preset = 'Aurora' } = {}) {
     this.container = container;
     this.basePreset = { ...PRESETS[preset] };
 
