@@ -119,7 +119,7 @@
       -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
       padding: 0.4rem 0.9rem; border-radius: 999px;
       border: 1px solid rgba(148, 163, 184, 0.12);
-      pointer-events: none; transition: opacity 200ms;
+      pointer-events: none; transition: opacity 600ms ease;
       opacity: 1;
     }
     #status-float:empty { opacity: 0; }
@@ -222,7 +222,27 @@
     const statusEl = document.getElementById("status-float");
     const idleHint = document.getElementById("idle-hint");
 
-    const setStatus = (t) => { statusEl.textContent = t; };
+    let _transientTimer = null;
+    const clearTransient = () => {
+      if (_transientTimer) { clearInterval(_transientTimer); _transientTimer = null; }
+    };
+    const setStatus = (t) => { clearTransient(); statusEl.textContent = t; };
+    const setTransientStatus = (text, seconds = 3) => {
+      clearTransient();
+      let n = seconds;
+      const render = () => { statusEl.textContent = `${text} · ${n}`; };
+      render();
+      _transientTimer = setInterval(() => {
+        n -= 1;
+        if (n <= 0) {
+          clearTransient();
+          statusEl.textContent = "";   // :empty triggers CSS opacity fade
+        } else {
+          render();
+        }
+      }, 1000);
+    };
+
     let pc = null;
     let localStream = null;
     let session = 'idle';    // 'idle' | 'starting' | 'live'
@@ -308,7 +328,7 @@
       for (const c of pc.pendingIceCandidates) await sendIceCandidate(pc, c);
       pc.pendingIceCandidates = [];
 
-      setStatus("connected — speak");
+      setTransientStatus("connected — speak", 3);
       session = 'live';
       btn.textContent = "Stop";
       btn.disabled = false;
