@@ -7,6 +7,20 @@
 # Build:  docker build -t protovoice .
 # Run:    docker compose up -d  (preferred — brings up fish-speech too)
 
+# ---------------------------------------------------------------------------
+# Stage 1: build the React SPA (web/).
+# Uses bun for install + Vite build. Output lands at /web/dist.
+# ---------------------------------------------------------------------------
+FROM oven/bun:1 AS web
+WORKDIR /web
+COPY web/package.json web/bun.lock* ./
+RUN bun install --frozen-lockfile
+COPY web/ ./
+RUN bun run build
+
+# ---------------------------------------------------------------------------
+# Stage 2: runtime (CUDA + Python).
+# ---------------------------------------------------------------------------
 FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -37,6 +51,8 @@ COPY config/ ./config/
 COPY skills/ ./skills/
 COPY static/ ./static/
 COPY voice/ ./voice/
+# Built SPA from stage 1 — served at / when FRONTEND=react (default once verified).
+COPY --from=web /web/dist/ ./web/dist/
 
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/models

@@ -397,6 +397,10 @@ async def text_agent(message: str, session_id: str) -> str:
     return reply
 
 STATIC_DIR = Path(__file__).parent / "static"
+WEB_DIST = Path(__file__).parent / "web" / "dist"
+# FRONTEND=react serves the SPA built from web/; FRONTEND=vanilla keeps the
+# legacy static/index.html. `auto` (default) picks react when web/dist exists.
+FRONTEND = os.environ.get("FRONTEND", "auto").lower()
 
 _handler = SmallWebRTCRequestHandler()
 
@@ -979,15 +983,50 @@ async def voice_clone(
     }
 
 
+def _serve_react() -> bool:
+    if FRONTEND == "vanilla":
+        return False
+    if FRONTEND == "react":
+        return True
+    # auto — use react when the bundle is present.
+    return WEB_DIST.exists() and (WEB_DIST / "index.html").exists()
+
+
 @app.get("/")
 async def index():
-    # Canonical p2p-webrtc client — adds BOTH audio+video transceivers
-    # (required by SmallWebRTCTransport) and queues ICE until pc_id is known.
+    # New (react) or legacy (vanilla) SPA. Canonical p2p-webrtc client
+    # adds BOTH audio+video transceivers (required by SmallWebRTCTransport)
+    # and queues ICE until pc_id is known.
+    if _serve_react():
+        return FileResponse(str(WEB_DIST / "index.html"))
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
+# Legacy vanilla shell stays mounted for a deprecation window.
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# React SPA assets — /assets/*, /pwa-*.png, /manifest.webmanifest, /sw.js, etc.
+if _serve_react():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(WEB_DIST / "assets")),
+        name="assets",
+    )
+    # Root-level SPA artifacts (manifest, service worker, icons, favicon).
+    for fname in ("manifest.webmanifest", "sw.js", "favicon.svg",
+                  "pwa-192.png", "pwa-512.png", "pwa-maskable-512.png"):
+        fpath = WEB_DIST / fname
+        if not fpath.exists():
+            continue
+
+        async def _serve_fixed(path=str(fpath)):
+            return FileResponse(path)
+
+        app.add_api_route(f"/{fname}", _serve_fixed, methods=["GET"])
+    # Also serve any other top-level files Vite emitted under dist/.
+    # Workbox shim files are hash-named; the ASSETS mount covers them if
+    # they land under /assets/. sw.js stays at root, handled above.
 
 
 # Inbound A2A — other agents can send us JSON-RPC `message/send`.
@@ -997,6 +1036,25 @@ register_a2a_routes(
     delivery_provider=lambda: _ACTIVE_DELIVERY,
     skill_slug_provider=lambda: _ACTIVE_SKILL_SLUG,
 )
+
+
+# SPA deep-link fallback — any GET that didn't match an earlier route
+# returns the react shell so client-side routes resolve correctly after
+# a hard reload. Registered LAST; earlier routes win. Skips /api, /.well-known,
+# /static, and anything with a file extension (lets 404s propagate cleanly
+# for missing assets instead of shadowing them with HTML).
+if _serve_react():
+    @app.get("/{path:path}")
+    async def spa_fallback(path: str):
+        if (
+            path.startswith("api/")
+            or path.startswith(".well-known/")
+            or path.startswith("static/")
+            or path.startswith("a2a")
+            or "." in path.split("/")[-1]
+        ):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return FileResponse(str(WEB_DIST / "index.html"))
 
 
 # ---------------------------------------------------------------------------

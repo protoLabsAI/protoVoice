@@ -5,3 +5,6 @@ __pycache__
 *.egg-info
 *.crt
 *.key
+web/node_modules
+web/dist
+web/.cache

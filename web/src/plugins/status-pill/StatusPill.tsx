@@ -1,0 +1,44 @@
+import { useEffect, useRef, useState } from 'react';
+import { RTVIEvent } from '@pipecat-ai/client-js';
+import { useRTVIClientEvent, usePipecatClientTransportState } from '@pipecat-ai/client-react';
+
+const IDLE_HINT = 'double-click the orb to start';
+const CONNECTED_HINT = 'connected — speak';
+const FADE_MS = 3000;
+
+export function StatusPill() {
+  const transport = usePipecatClientTransportState();
+  const [transient, setTransient] = useState<string | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  const showTransient = (text: string, ms = FADE_MS) => {
+    if (timerRef.current != null) window.clearTimeout(timerRef.current);
+    setTransient(text);
+    timerRef.current = window.setTimeout(() => setTransient(null), ms);
+  };
+
+  useRTVIClientEvent(RTVIEvent.BotReady, () => showTransient(CONNECTED_HINT));
+  useRTVIClientEvent(RTVIEvent.Error, (m: unknown) => {
+    const data = m as { data?: { error?: string } } | undefined;
+    showTransient(`error: ${data?.data?.error ?? 'unknown'}`, 4000);
+  });
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current != null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const disconnected = transport === 'disconnected' || transport === 'initialized' || transport === 'error';
+  const text = transient ?? (disconnected ? IDLE_HINT : null);
+
+  if (!text) return null;
+
+  return (
+    <div className="pointer-events-none fixed bottom-6 left-1/2 -translate-x-1/2 z-10">
+      <div className="px-4 py-1.5 rounded-full bg-zinc-900/80 border border-zinc-800 text-zinc-300 text-xs font-mono tracking-wide backdrop-blur-sm transition-opacity">
+        {text}
+      </div>
+    </div>
+  );
+}

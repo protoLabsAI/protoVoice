@@ -1,10 +1,10 @@
 # Tonight's Status — Pickup for Tomorrow
 
-Updated after v0.6.0 ship. Branch: `main`. Working tree: clean.
+Updated after v0.6.2 + React frontend migration. Branch: `main`.
 
 ## TL;DR
 
-**v0.5.0 + v0.6.0 both shipped tonight.** Biggest remaining track for tomorrow is the **React frontend migration** — vanilla `static/index.html` will be replaced. The server-side Langfuse tracing + RTVI observer are already in place waiting for client consumption.
+**React frontend migration shipped.** `web/` (bun + Vite 6 + React 19 + shadcn/ui + Tailwind 4 + PWA) replaces vanilla `static/index.html` at `/`. Legacy shell stays mounted at `/static/legacy/` behind `FRONTEND=vanilla` for instant rollback. RTVI protocol fully consumed — orb state is driven by authoritative events, not audio-RMS heuristics. Plugin architecture in place with UI-slot registry for future extensibility.
 
 ## Where we are
 
@@ -21,17 +21,25 @@ Updated after v0.6.0 ship. Branch: `main`. Working tree: clean.
 - **Delivery polish**: NEXT_SILENCE fallback timer (muted-mic), WHEN_ASKED TTL.
 - **Client fix**: outbound A2A messages now carry `messageId` per spec.
 
-### What's NOT in v0.6 (explicitly deferred)
+### What landed with the React migration (v0.7 track)
+- **E3** — orb state driven by RTVI events (UserStartedSpeaking / BotLlmStarted / BotStartedSpeaking / BotStoppedSpeaking); audio-envelope derivation remains as fallback
+- **E4** — `idle / listening / thinking / speaking` state chip (shadcn Badge, top-right)
+- **C11** — RTVI observer fully consumed via `@pipecat-ai/client-react` + `@pipecat-ai/small-webrtc-transport`
+- Plugin architecture: `plugins/{orb, orb-settings, status-chip, status-pill, voice-panel}` with a UI-slot registry (`stage`, `overlay-top`, `overlay-bottom`, `drawer-voice`, `drawer-orb`)
+- PWA — installable, app shell precached, `/api/*` + `/.well-known/*` excluded from service-worker interception
+
+### What's still deferred
 | ID | Item | Why deferred | Target |
 |---|---|---|---|
-| E2/E3/E4 | Client RTVI consumption + orb rewire + state chip | React migration tomorrow | v0.7 (React track) |
-| C11 | RTVI observer adoption in client | Same as above | v0.7 |
-| K25 | Prompt registry migration (Langfuse prompts) | Not load-bearing for v0.6 value | v0.7+ |
+| K25 | Prompt registry migration (Langfuse prompts) | Not load-bearing | v0.7+ |
 | F8 | JWT + JWKS on `/a2a/push` | Shared-secret fine for tailnet | when public-exposed |
 | H15 | Per-skill TTS backend | Stretch, not critical | v0.7+ |
 | G9-G11 | Multi-tenant session keying | Single-user homelab still | v0.7+ |
 | I16-I18 | Prometheus / HF Spaces / E2E tests | Observability + deploy polish | v0.7+ |
 | J19 | Confidence-aware prosody | Nice-to-have, needs router confidence surface | v0.7+ |
+| — | Transcript panel plugin | Cheap add — RTVI transcripts already flowing | v0.7+ |
+| — | Trace-chip plugin (Langfuse trace id link) | Lands when Langfuse env vars are wired | v0.7+ |
+| — | Per-user server-side preset storage | localStorage fine single-user; server-side blocked on G9 | v0.7+ |
 
 ## Waiting on external
 
@@ -48,37 +56,24 @@ LANGFUSE_SECRET_KEY=sk-lf-...
 ```
 In `.env` (local) or the deployment env. No code changes needed.
 
-## Tomorrow's main track — React frontend
+## Web frontend reference (where things live)
 
-The big piece. Scope notes:
+- `web/` — bun + Vite 6 + React 19 + shadcn/ui + Tailwind 4 + vite-plugin-pwa.
+- `web/src/voice/` — PipecatClient wiring, derived voice-state store (useSyncExternalStore), hooks (`useVoiceState`, `useVoiceStateSelector`, `useVoiceSession`, `useBotTurnEvents`, `useUserTurnEvents`).
+- `web/src/plugins/` — one directory per plugin. Each registers at module import via `registerPlugin({ id, slots })`. Add a plugin: drop a dir, export a component, side-effect-import from `App.tsx`.
+- `web/src/lib/api.ts` — typed fetches for `/api/{skills,verbosity,voice/clone}`.
+- `web/src/components/Drawer.tsx` — shadcn Sheet + Tabs hosting the voice/orb drawer panels.
+- `app.py` — `FRONTEND=auto|react|vanilla` env flag picks the shell. `auto` uses `web/dist/` when present, legacy `static/` otherwise.
+- `Dockerfile` — stage 1 builds `web/` via `oven/bun:1`; stage 2 copies `web/dist/` into the CUDA runtime image.
+- Dev: `cd web && bun run dev` + `sudo tailscale serve --bg --https=8443 http://127.0.0.1:5173` for tailnet-accessible HMR with full HTTPS (mic permission).
 
-### Motivation
-- vanilla `static/index.html` has drifted into significant complexity (500+ lines of JS, orb wiring, drawer UI, preset persistence, settings controls)
-- RTVI server-side is in place — we want to consume it client-side so orb state comes from authoritative events, not audio-RMS heuristics
-- UI wants room to grow (state chip, settings panel, transcript view, voice-clone flow, developer-view HUD)
+## Tomorrow's main track — v0.7 polish + next features
 
-### Recommended approach
-1. **New top-level dir `web/`** alongside `static/`. Vite + React + TypeScript. Keep `static/` mountable at `/static` for a deprecation period.
-2. **RTVI consumer**: choose one of
-   - `@pipecat-ai/client-web` — full client library (signaling, audio, RTVI events). Wholesale, but you get RTVI out of the box.
-   - Minimal custom consumer — ~50 lines in a React hook that reads the data channel directly. Less dep, more code.
-
-   Given we want the React frontend to potentially become more sophisticated, `@pipecat-ai/client-web` is probably the right call — but validate its bundle size + audio handling match what we want before committing.
-3. **Port Three.js orb to a React component.** The shader code + audio-reactive logic in `static/viz.js` is already well-separated; wrap it in a `useRef`-based component that mounts the canvas. Adapt `attachStream()` hooks to work off RTVI events *and* raw audio tracks (keep energy reactivity on top of authoritative state).
-4. **Build the server wire-up**: `app.py` mounts `/` → React SPA, `/static/` → legacy vanilla still available for a release cycle as fallback. Signalling stays at `/api/offer`.
-5. **Drop C11 task** when E2/E3/E4 land in React — they were always meant to go together.
-
-### Things to preserve from vanilla
-- Orb visualizer (all the audio-reactive + mouse interaction + state transitions)
-- Presets (5 palettes, custom saved presets, localStorage persistence)
-- Drawer UI (hamburger, voice/orb tabs, Skill + Verbosity + Visual Preset controls, voice clone form)
-- Double-click-orb-to-start
-- Status pill (connected — speak, fade after 3s)
-
-### Things to add in React (that were deferred)
-- **E3 viz rewire** — orb state (idle/listening/thinking/speaking) driven by RTVI events, not envelope thresholds.
-- **E4 state chip** — `idle`/`listening`/`thinking`/`speaking` text label visible alongside the orb.
-- **Settings panel** expanded with the K20+ trace debug-view (trace ID display, link to Langfuse UI).
+Easy vertical slices to land on top of the React frontend:
+- **Transcript panel plugin** — new `plugins/transcript/` that listens to `UserTranscript` + `BotTranscript` and renders in `overlay-bottom` or a new drawer tab. Cheap add — events already flowing.
+- **Trace-chip plugin** — show active Langfuse trace id (needs `LANGFUSE_*` env set on the deployed box). Open-in-Langfuse link.
+- **Code-split the bundle** — current 359 KB gz is under budget but `three` is ~130 KB gz of that; dynamic `import()` of the orb plugin shaves the initial shell.
+- **Remove legacy `static/`** once React has a few weeks in prod without rollback. Drop `FRONTEND=vanilla` handling at that point.
 
 ## Quick-start commands
 
