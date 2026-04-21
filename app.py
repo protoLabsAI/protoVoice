@@ -88,6 +88,7 @@ from agent.filler import (
     Latency,
     Settings as FillerSettings,
     Verbosity,
+    plan_block,
     tool_response_block,
     tool_use_block,
 )
@@ -221,12 +222,14 @@ def _effective_prompt(skill: Skill, tts_backend: str) -> str:
     primitive), with prosody guidance per backend.
     """
     base = _SYSTEM_PROMPT_ENV_OVERRIDE or skill.system_prompt
+    plan = plan_block(_FILLER.verbosity)
     return (
         base
         + "\n\n"
         + tool_use_block(_FILLER.verbosity, tts_backend)
         + "\n\n"
         + tool_response_block(_FILLER.verbosity)
+        + (("\n\n" + plan) if plan else "")
     )
 
 

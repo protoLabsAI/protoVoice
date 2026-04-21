@@ -104,6 +104,36 @@ _RESPONSE_LENGTH_BY_VERBOSITY: dict[Verbosity, str] = {
 }
 
 
+def plan_block(verbosity: Verbosity) -> str:
+    """Returns the PLANNING SIGNAL block appended to every persona's
+    system prompt. Asks the LLM to self-judge when a request warrants a
+    spoken plan preamble.
+
+    CHI 2025 ("Think Aloud, Speak Aloud", Zhou et al.): spoken plan
+    preambles increased trust 0.6/5 for ≥3-step tasks but DECREASED
+    satisfaction on ≤2-step tasks (reads as patronizing). The block is
+    suppressed entirely under verbosity=silent.
+    """
+    if verbosity is Verbosity.SILENT:
+        return ""
+    return """\
+## PLANNING SIGNAL — 3+ step tasks only
+
+If the user's request needs THREE OR MORE coordinated steps (multiple
+tool calls, a handoff to another agent, a compose-then-verify loop,
+anything you expect to take more than ~5 s of work), open your response
+with a SHORT plan line:
+
+  "Okay — I'll check X, then Y, then confirm."
+
+Rules:
+  - Skip the plan entirely for simple one- or two-step asks. Spelling
+    out a plan for "what's the weather?" feels patronizing.
+  - Cap the plan at ~15 words. Don't restate the user's question.
+  - Don't repeat the plan verbatim later in the response.
+"""
+
+
 def tool_response_block(verbosity: Verbosity) -> str:
     """Returns the POST-TOOL RESPONSE block appended to every persona's
     system prompt. Keeps spoken replies from tool results tight and voice-
