@@ -61,6 +61,7 @@ async def dispatch_message(
         "params": {
             "contextId": context_id,
             "message": {
+                "messageId": str(uuid.uuid4()),  # A2A spec — required field
                 "role": "user",
                 "parts": [{"kind": "text", "text": user_text}],
             },
@@ -143,6 +144,7 @@ async def dispatch_message_stream(
     params: dict = {
         "contextId": context_id,
         "message": {
+            "messageId": str(uuid.uuid4()),  # A2A spec — required field
             "role": "user",
             "parts": [{"kind": "text", "text": user_text}],
         },
