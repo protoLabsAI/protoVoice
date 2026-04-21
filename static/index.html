@@ -20,69 +20,136 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       overflow: hidden;
     }
-    #viz {
-      position: fixed; inset: 0; z-index: 0;
-    }
-    #viz canvas { display: block; width: 100% !important; height: 100% !important;
-      cursor: grab; touch-action: none; }
-    #viz canvas:active { cursor: grabbing; }
-    main {
-      position: relative; z-index: 10;
-      min-height: 100vh; display: grid; place-items: end center;
-      padding: 2rem; box-sizing: border-box; pointer-events: none;
-    }
-    main > * { pointer-events: auto; }
-    .panel {
-      background: rgba(10, 15, 20, 0.55);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(148, 163, 184, 0.15);
-      border-radius: 1rem;
-      padding: 1.5rem 2rem;
-      text-align: center;
-      max-width: 34rem; width: 100%;
-    }
-    h1 { margin: 0; color: #5eead4; font-weight: 500; letter-spacing: -0.02em; font-size: 1.4rem; }
-    p { opacity: 0.7; margin: 0.25rem 0 1.25rem; font-size: 0.9rem; }
-    button {
-      background: #14b8a6; color: #fff; border: 0; border-radius: 999px;
-      padding: 0.75rem 1.75rem; font-size: 1rem; cursor: pointer;
-      transition: background .15s;
-    }
-    button:hover { background: #0d9488; }
-    button:disabled { background: #475569; cursor: not-allowed; }
-    #status { margin-top: 1rem; font-size: 0.8rem; opacity: 0.6; min-height: 1.2em; }
     audio { display: none; }
-    .controls { margin-top: 1rem; font-size: 0.85rem; opacity: 0.85; display: flex;
-      gap: 0.75rem; justify-content: center; flex-wrap: wrap; align-items: center; }
-    .controls label { opacity: 0.7; }
-    select, input[type=text], input[type=file], textarea {
-      background: rgba(22, 32, 48, 0.85); color: #e2e8f0;
-      border: 1px solid rgba(20, 184, 166, 0.35); border-radius: 0.5rem;
-      padding: 0.3rem 0.5rem; font-size: 0.85rem;
+
+    /* --- The viewport is the orb. ---------------------------------------- */
+    #viz { position: fixed; inset: 0; z-index: 0; }
+    #viz canvas {
+      display: block; width: 100% !important; height: 100% !important;
+      cursor: grab; touch-action: none;
     }
-    select:focus, input:focus, textarea:focus { outline: 0; border-color: #14b8a6; }
-    details { margin-top: 1rem; font-size: 0.85rem; text-align: left; }
-    details summary { cursor: pointer; opacity: 0.7; padding: 0.25rem 0; }
+    #viz canvas:active { cursor: grabbing; }
+
+    /* --- Hamburger toggle ------------------------------------------------- */
+    #menu-toggle {
+      position: fixed; top: 1rem; right: 1rem; z-index: 25;
+      width: 2.75rem; height: 2.75rem;
+      background: rgba(10, 15, 20, 0.55);
+      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 0.6rem;
+      padding: 0;
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      gap: 5px; cursor: pointer;
+      transition: background 150ms;
+    }
+    #menu-toggle:hover { background: rgba(20, 184, 166, 0.20); }
+    #menu-toggle span {
+      display: block; width: 1.1rem; height: 2px; background: #e2e8f0;
+      border-radius: 2px;
+      transition: transform 220ms cubic-bezier(0.4, 0, 0.2, 1),
+                  opacity 180ms;
+    }
+    #menu-toggle[aria-expanded="true"] span:nth-child(1) {
+      transform: translateY(7px) rotate(45deg);
+    }
+    #menu-toggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
+    #menu-toggle[aria-expanded="true"] span:nth-child(3) {
+      transform: translateY(-7px) rotate(-45deg);
+    }
+
+    /* --- Side drawer ------------------------------------------------------ */
+    #drawer {
+      position: fixed; top: 0; right: 0; z-index: 20;
+      width: 22rem; max-width: 88vw; height: 100vh;
+      background: rgba(10, 15, 20, 0.78);
+      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+      border-left: 1px solid rgba(148, 163, 184, 0.12);
+      transform: translateX(100%);
+      transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1);
+      overflow-y: auto; box-sizing: border-box;
+    }
+    #drawer[aria-hidden="false"] { transform: translateX(0); }
+    .drawer-inner { padding: 5rem 1.5rem 1.5rem; display: grid; gap: 1rem; }
+    .drawer-inner h1 {
+      margin: 0; color: #5eead4; font-weight: 500; letter-spacing: -0.02em;
+      font-size: 1.25rem;
+    }
+    .drawer-inner p { margin: 0; opacity: 0.65; font-size: 0.85rem; line-height: 1.5; }
+    .drawer-inner button.primary {
+      background: #14b8a6; color: #fff; border: 0; border-radius: 999px;
+      padding: 0.75rem 1.5rem; font-size: 0.95rem; cursor: pointer;
+      transition: background .15s;
+      justify-self: start;
+    }
+    .drawer-inner button.primary:hover { background: #0d9488; }
+    .drawer-inner button.primary:disabled { background: #475569; cursor: not-allowed; }
+
+    .row { display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 0.75rem;
+           align-items: center; font-size: 0.85rem; }
+    .row label { opacity: 0.7; }
+    select, input[type=text], input[type=file], textarea {
+      background: rgba(22, 32, 48, 0.6); color: #e2e8f0;
+      border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 0.4rem;
+      padding: 0.35rem 0.5rem; font-size: 0.85rem; width: 100%; box-sizing: border-box;
+    }
+    select:focus, input:focus, textarea:focus {
+      outline: 0; border-color: #14b8a6;
+    }
+
+    details summary { cursor: pointer; opacity: 0.75; padding: 0.3rem 0; font-size: 0.85rem; }
     details summary:hover { opacity: 1; }
     .clone-form { display: grid; gap: 0.5rem; margin-top: 0.5rem; padding: 0.75rem;
-      background: rgba(15, 22, 32, 0.8); border-radius: 0.5rem;
-      border: 1px solid rgba(20,184,166,0.15); }
+      background: rgba(15, 22, 32, 0.55); border-radius: 0.5rem;
+      border: 1px solid rgba(20, 184, 166, 0.12); }
+    .clone-form label { font-size: 0.8rem; opacity: 0.75; }
     .clone-form textarea { resize: vertical; min-height: 3em; }
-    .clone-form button { margin-top: 0.25rem; padding: 0.5rem 1rem; font-size: 0.9rem; }
-    .clone-status { font-size: 0.8rem; opacity: 0.6; min-height: 1.2em; }
+    .clone-form button {
+      background: rgba(20, 184, 166, 0.85); color: #fff; border: 0;
+      border-radius: 0.4rem; padding: 0.45rem 0.8rem;
+      font-size: 0.85rem; cursor: pointer;
+    }
+    .clone-status { font-size: 0.75rem; opacity: 0.65; min-height: 1.2em; }
+
+    /* --- Floating status pill --------------------------------------------- */
+    #status-float {
+      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+      z-index: 15; font-size: 0.8rem; letter-spacing: 0.02em;
+      background: rgba(10, 15, 20, 0.5);
+      -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+      padding: 0.4rem 0.9rem; border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      pointer-events: none; transition: opacity 200ms;
+      opacity: 1;
+    }
+    #status-float:empty { opacity: 0; }
+
+    /* --- Tiny "dbl-click to start" hint at idle --------------------------- */
+    #idle-hint {
+      position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%, calc(-50% + 11rem));
+      z-index: 12; font-size: 0.78rem; opacity: 0;
+      color: rgba(226, 232, 240, 0.6);
+      pointer-events: none; letter-spacing: 0.04em;
+      transition: opacity 400ms;
+    }
+    #idle-hint.show { opacity: 1; }
   </style>
 </head>
 <body>
   <div id="viz"></div>
-  <main>
-    <div class="panel">
+
+  <button id="menu-toggle" aria-label="Toggle menu" aria-expanded="false">
+    <span></span><span></span><span></span>
+  </button>
+
+  <aside id="drawer" aria-hidden="true">
+    <div class="drawer-inner">
       <h1>protoVoice</h1>
-      <p>Click, speak, listen.</p>
-      <button id="btn">Start</button>
-      <div id="status"></div>
-      <audio id="audio" autoplay></audio>
-      <div class="controls">
+      <p>Double-click the orb to start or stop. Drag to spin. Click to pulse.</p>
+      <button id="btn" class="primary">Start</button>
+
+      <div class="row">
         <label for="skill" title="Applies on next Start">Skill</label>
         <select id="skill" title="Applies on next Start"></select>
         <label for="verbosity">Verbosity</label>
@@ -125,26 +192,40 @@
         </form>
       </details>
     </div>
-  </main>
+  </aside>
+
+  <div id="status-float"></div>
+  <div id="idle-hint" class="show">double-click the orb to start</div>
+  <audio id="audio" autoplay></audio>
 
   <script type="module">
     import { VoiceOrb } from '/static/viz.js';
 
-    // Mount the visualizer immediately — idle orb before any session starts.
     const orb = new VoiceOrb(document.getElementById('viz'), { preset: 'Default' });
-    window.__orb = orb; // handy for console tweaking
+    window.__orb = orb;
 
-    // WebRTC mechanics match pipecat's canonical p2p-webrtc example:
-    //   - both audio AND video transceivers (SmallWebRTCTransport requires it)
-    //   - trickle ICE with a pc_id-gated queue so candidates don't 404
-    //   - no manual createDataChannel — aiortc negotiates it from the SDP
+    // --- Drawer toggle ----------------------------------------------------
+    const drawer = document.getElementById('drawer');
+    const toggle = document.getElementById('menu-toggle');
+    const setDrawer = (open) => {
+      drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    toggle.addEventListener('click', () => {
+      const open = drawer.getAttribute('aria-hidden') === 'true';
+      setDrawer(open);
+    });
+
+    // --- WebRTC ----------------------------------------------------------
     const btn = document.getElementById("btn");
     const audioEl = document.getElementById("audio");
-    const statusEl = document.getElementById("status");
+    const statusEl = document.getElementById("status-float");
+    const idleHint = document.getElementById("idle-hint");
 
     const setStatus = (t) => { statusEl.textContent = t; };
     let pc = null;
     let localStream = null;
+    let session = 'idle';    // 'idle' | 'starting' | 'live'
 
     const sendIceCandidate = async (pc, candidate) => {
       await fetch("/api/offer", {
@@ -162,13 +243,18 @@
     };
 
     const start = async () => {
+      if (session !== 'idle') return;
+      session = 'starting';
       btn.disabled = true;
+      idleHint.classList.remove('show');
       setStatus("requesting mic...");
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (_e) {
         setStatus("mic denied");
         btn.disabled = false;
+        session = 'idle';
+        idleHint.classList.add('show');
         return;
       }
 
@@ -199,12 +285,9 @@
         }
       };
 
-      // SmallWebRTCTransport expects BOTH audio and video transceivers in the
-      // offer, even in an audio-only app. Omitting video breaks DTLS/SCTP.
       pc.addTransceiver(localStream.getAudioTracks()[0], { direction: "sendrecv" });
       pc.addTransceiver("video", { direction: "sendrecv" });
 
-      // Hook the visualizer to the local mic for user-speech energy.
       orb.attachStream(localStream, 'local');
 
       await pc.setLocalDescription(await pc.createOffer());
@@ -226,26 +309,39 @@
       pc.pendingIceCandidates = [];
 
       setStatus("connected — speak");
+      session = 'live';
       btn.textContent = "Stop";
       btn.disabled = false;
-      btn.onclick = stop;
     };
 
     const stop = () => {
+      if (session === 'idle') return;
       if (pc) { pc.close(); pc = null; }
       if (localStream) { for (const t of localStream.getTracks()) t.stop(); localStream = null; }
       audioEl.srcObject = null;
       orb.detachStream('local');
       orb.detachStream('remote');
       btn.textContent = "Start";
-      btn.onclick = start;
       btn.disabled = false;
-      setStatus("stopped");
+      session = 'idle';
+      setStatus("");
+      idleHint.classList.add('show');
     };
 
-    btn.onclick = start;
+    const toggleSession = () => {
+      if (session === 'idle') start();
+      else if (session === 'live') stop();
+    };
 
-    // Verbosity dropdown — sync both ways with the server.
+    btn.onclick = toggleSession;
+
+    // Double-click the orb to start/stop. The orb canvas lives in #viz.
+    document.getElementById('viz').addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      toggleSession();
+    });
+
+    // --- Verbosity -------------------------------------------------------
     const verbEl = document.getElementById("verbosity");
     fetch("/api/verbosity")
       .then(r => r.json())
@@ -259,14 +355,12 @@
       });
     });
 
-    // Visualizer preset — purely client-side.
+    // --- Visual preset ---------------------------------------------------
     const vizEl = document.getElementById("viz-preset");
     vizEl.addEventListener("change", () => orb.setPreset(vizEl.value));
 
-    // Skill dropdown — populated from /api/skills. Change-of-skill applies
-    // to the NEXT connect, not mid-session; the label hints that.
+    // --- Skill dropdown --------------------------------------------------
     const skillEl = document.getElementById("skill");
-
     async function refreshSkills(selectSlug) {
       const j = await fetch("/api/skills").then(r => r.json()).catch(() => ({skills: []}));
       skillEl.innerHTML = "";
@@ -288,7 +382,7 @@
       });
     });
 
-    // Voice-clone form.
+    // --- Voice clone -----------------------------------------------------
     const cloneForm = document.getElementById("clone-form");
     const cloneStatus = document.getElementById("clone-status");
     cloneForm.addEventListener("submit", async (e) => {
