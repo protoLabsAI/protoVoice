@@ -42,6 +42,8 @@ The Fish wrapper (`[softly]` or `[whisper] [softly]` if missing) keeps the backc
 
 - `VERBOSITY=silent` — no backchannels (or any filler) fire.
 - A user turn shorter than `BACKCHANNEL_FIRST_SECS` — no backchannel; timer cancels on stop.
+- **Bot is speaking** — a `UserStartedSpeakingFrame` arriving mid-TTS is treated as echo bleed past the guard; the timer does not start. Any pending backchannel also cancels when `BotStartedSpeakingFrame` fires.
+- **Generator finished too late** — if the generator call completes after the user has stopped or the bot has started responding, the phrase is dropped rather than tacked onto the agent's reply.
 - LLM generator timeout/error — the backchannel is dropped (logged as warning); the next interval tries again.
 
 ## Why generative
@@ -50,9 +52,8 @@ The same reasons as [filler](/explanation/natural-fillers): a fixed pool of "mm-
 
 ## Caveats
 
-- **Pipecat may suppress backchannels** if the bot is mid-TTS when the user starts speaking — the InterruptionFrame broadcast clears in-flight audio. In normal conversation flow (user listening → user starts speaking → backchannel), the bot ISN'T speaking so the audio plays cleanly.
 - **Volume mismatch** — if you find Fish backchannels too loud, edit the wrap in `agent/filler.FillerGenerator.backchannel()` from `[softly]` to `[whisper] [softly]`. Whisper is much quieter but loses some intelligibility — try in your room first.
-- **Latency to first backchannel matters** — the LLM generator takes ~50-200ms. If you set `BACKCHANNEL_FIRST_SECS=2`, generation may finish AFTER the user has already paused. The 5s default leaves plenty of headroom.
+- **Latency to first backchannel matters** — the LLM generator takes ~50-200ms. If you set `BACKCHANNEL_FIRST_SECS=2`, generation may finish AFTER the user has already paused. The 5s default leaves plenty of headroom, and the emit step re-checks `_bot_speaking` / `_user_speaking` so a late-arriving phrase won't tack onto the agent's reply.
 
 ## Disabling
 
