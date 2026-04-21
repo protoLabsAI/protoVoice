@@ -50,6 +50,12 @@ services:
       - "${PORT:-7866}:7866"
     volumes:
       - ${HF_HOME:-/mnt/models/huggingface}:/models
+    # env_file picks up secrets like WORKSTACEAN_API_KEY / AVA_API_KEY that
+    # aren't enumerated below — don't require a compose edit for every new
+    # delegate key.
+    env_file:
+      - path: .env
+        required: false
     environment:
       - NVIDIA_VISIBLE_DEVICES=${PROTOVOICE_GPU:-0}
       - HF_HOME=/models

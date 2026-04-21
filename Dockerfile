@@ -31,9 +31,13 @@ RUN pip install --no-cache-dir \
     https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 
 COPY app.py ./
-COPY voice/ ./voice/
-COPY static/ ./static/
+COPY a2a/ ./a2a/
+COPY agent/ ./agent/
 COPY config/ ./config/
+COPY memory/ ./memory/
+COPY skills/ ./skills/
+COPY static/ ./static/
+COPY voice/ ./voice/
 
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/models
