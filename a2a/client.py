@@ -25,6 +25,8 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 
+from agent.tracing import active_trace, propagation_headers
+
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], Awaitable[None]]
@@ -67,6 +69,8 @@ async def dispatch_message(
     req_headers = {"Content-Type": "application/json"}
     if headers:
         req_headers.update(headers)
+    # Cross-fleet trace propagation (see docs/reference/tracing-contract.md).
+    req_headers.update(propagation_headers(trace=active_trace()))
 
     logger.info(f"[a2a] dispatch → {url}")
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -162,6 +166,8 @@ async def dispatch_message_stream(
     }
     if headers:
         req_headers.update(headers)
+    # Cross-fleet trace propagation (see docs/reference/tracing-contract.md).
+    req_headers.update(propagation_headers(trace=active_trace()))
 
     logger.info(f"[a2a/stream] dispatch → {url}")
     final_text: str | None = None

@@ -630,6 +630,7 @@ async def run_bot(webrtc_connection) -> None:
         global _ACTIVE_DELIVERY, _ACTIVE_TRACER
         _ACTIVE_DELIVERY = delivery
         _ACTIVE_TRACER = turn_tracer
+        _tracing.set_active_tracer(turn_tracer)
         _tracing.start_session(turn_tracer.session_id if hasattr(turn_tracer, "session_id") else "")
         _METRICS["sessions_total"] += 1
         _METRICS["sessions_active"] += 1
@@ -655,6 +656,7 @@ async def run_bot(webrtc_connection) -> None:
             _ACTIVE_DELIVERY = None
         if _ACTIVE_TRACER is turn_tracer:
             _ACTIVE_TRACER = None
+            _tracing.set_active_tracer(None)
         _tracing.flush()
         _METRICS["sessions_active"] = max(0, _METRICS["sessions_active"] - 1)
         _cancel_progress()

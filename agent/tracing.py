@@ -265,6 +265,34 @@ def make_turn_tracer(session_id: str, user_id: str | None = None) -> Any:
     return _ActiveTracer(session_id=session_id, user_id=user_id)
 
 
+# ---------------------------------------------------------------------------
+# Cross-fleet trace propagation
+# ---------------------------------------------------------------------------
+
+def propagation_headers(
+    *,
+    trace: Any | None = None,
+    parent_observation_id: str | None = None,
+) -> dict[str, str]:
+    """Return the Langfuse-* HTTP headers that carry the current trace
+    across fleet boundaries. Empty dict if tracing is off or there's no
+    live trace. See docs/reference/tracing-contract.md for the spec.
+    """
+    if not enabled() or trace is None:
+        return {}
+    trace_id = getattr(trace, "id", "") or getattr(trace, "trace_id", "")
+    session_id = getattr(trace, "session_id", "") or ""
+    if not (trace_id and session_id):
+        return {}
+    headers = {
+        "Langfuse-Trace-Id": str(trace_id),
+        "Langfuse-Session-Id": str(session_id),
+    }
+    if parent_observation_id:
+        headers["Langfuse-Parent-Observation-Id"] = str(parent_observation_id)
+    return headers
+
+
 def flush() -> None:
     """Drain queued events before shutdown so nothing is lost. Safe to
     call when disabled."""
@@ -275,3 +303,28 @@ def flush() -> None:
         client.flush()
     except Exception as e:
         logger.warning(f"[tracing] flush failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Active-tracer registry — lets arbitrary modules reach the live trace
+# without importing app.py (circular-import-safe).
+# ---------------------------------------------------------------------------
+
+_ACTIVE: Any = None
+
+
+def set_active_tracer(tracer: Any) -> None:
+    global _ACTIVE
+    _ACTIVE = tracer
+
+
+def active_tracer() -> Any:
+    return _ACTIVE
+
+
+def active_trace() -> Any:
+    """Shorthand for the current live turn trace (or _NULL if none)."""
+    t = _ACTIVE
+    if t is None or not hasattr(t, "get_current_trace"):
+        return _NULL
+    return t.get_current_trace()

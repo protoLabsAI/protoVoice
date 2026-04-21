@@ -46,6 +46,7 @@ from a2a.client import (
     dispatch_message as _a2a_dispatch,
     dispatch_message_stream as _a2a_stream,
 )
+from agent.tracing import active_trace, propagation_headers
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +281,10 @@ async def _dispatch_openai(delegate: Delegate, query: str, *, timeout: float) ->
         "The answer will be spoken aloud verbatim."
     )
     headers = {"Content-Type": "application/json"}
+    # Cross-fleet trace propagation — harmless on vanilla OpenAI but
+    # stitches our trace if the endpoint is a fleet peer that speaks
+    # the contract (see docs/reference/tracing-contract.md).
+    headers.update(propagation_headers(trace=active_trace()))
     if delegate.openai_api_key and delegate.openai_api_key != "not-needed":
         # Both standard (Authorization: Bearer) and workstacean-style
         # (X-API-Key) are accepted by the servers we target today.

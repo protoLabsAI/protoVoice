@@ -164,11 +164,30 @@ def register_a2a_routes(
         context_id = params.get("contextId") or str(uuid.uuid4())
         session_id = f"a2a:{context_id}"
         logger.info(f'[a2a/in] {context_id[:8]}… "{user_text[:80]}"')
+
+        # Cross-fleet trace continuation — if the caller attached our
+        # contract headers, pick up their trace so their request nests
+        # inside our spans (see docs/reference/tracing-contract.md).
+        from agent import tracing as _trc
+        caller_trace_id = request.headers.get("Langfuse-Trace-Id") or ""
+        caller_session_id = request.headers.get("Langfuse-Session-Id") or ""
+        inbound_trace = None
+        if caller_trace_id and caller_session_id and _trc.enabled():
+            inbound_trace = _trc.continue_trace(
+                trace_id=caller_trace_id,
+                session_id=caller_session_id,
+            )
+            logger.info(f"[a2a/in] continuing caller trace {caller_trace_id[:8]}…")
+
         try:
             reply = await text_agent(user_text, session_id)
         except Exception as e:
             logger.exception("[a2a/in] text_agent raised")
             return _jsonrpc_error(rpc_id, -32000, f"agent error: {e}", status=500)
+        finally:
+            # Flush early so the caller sees our spans quickly.
+            if inbound_trace is not None:
+                _trc.flush()
 
         return JSONResponse(
             content={
