@@ -273,7 +273,11 @@ const SPEAK_ENTER = 0.08;
 const SPEAK_EXIT  = 0.035;
 const LISTEN_MIN_DWELL_MS = 500;   // stay in listening at least this long
 const THINK_DWELL_MS = 1400;       // "handoff" beat after user stops
-const STATE_XFADE_MS = 320;        // state-to-state interpolation duration
+const STATE_XFADE_MS = 600;        // state-to-state interpolation — slower = more deliberate
+
+// Cap per-frame delta so backgrounded tabs / GPU stalls / long GC pauses
+// don't translate into huge uTime or rotation jumps on the next frame.
+const MAX_DELTA_S = 1 / 30;        // ~33 ms = 30 fps floor
 
 // Idle breath — two non-commensurate low-frequency sines for life-without-loops.
 const BREATH_HZ_1 = 0.10;
@@ -503,6 +507,10 @@ export class VoiceOrb {
 
     this._startTimeMs = performance.now();
     this.clock = new THREE.Clock();
+    // Preallocate scratch vector for the localCam computation in _tick so
+    // we don't allocate per frame (GC pressure builds up over long sessions
+    // and shows up as intermittent jitter).
+    this._scratchCam = new THREE.Vector3();
     this._onResize = this._onResize.bind(this);
     window.addEventListener('resize', this._onResize);
 
@@ -695,7 +703,9 @@ export class VoiceOrb {
     if (!this._running) return;
     requestAnimationFrame(this._tick);
 
-    const delta = this.clock.getDelta();
+    // Clamp delta — a 2-second backgrounded pause shouldn't translate to a
+    // 2-second uTime jump or a visible rotation snap on the next frame.
+    const delta = Math.min(this.clock.getDelta(), MAX_DELTA_S);
     const nowMs = performance.now();
 
     // ---- Audio envelopes -------------------------------------------------
@@ -801,9 +811,9 @@ export class VoiceOrb {
 
     // ---- Render ---------------------------------------------------------
     this.orb.updateMatrixWorld();
-    const localCam = new THREE.Vector3().copy(this.camera.position);
-    this.orb.worldToLocal(localCam);
-    this.uniforms.uLocalCamPos.value.copy(localCam);
+    this._scratchCam.copy(this.camera.position);
+    this.orb.worldToLocal(this._scratchCam);
+    this.uniforms.uLocalCamPos.value.copy(this._scratchCam);
 
     this.composer.render();
   }
