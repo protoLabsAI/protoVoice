@@ -178,11 +178,14 @@ const fragmentShader = /* glsl */ `
     float maxLuma = max(finalColor.r, max(finalColor.g, finalColor.b));
     float alpha = clamp(maxLuma * 1.5, 0.0, 1.0) * edgeAA;
 
-    // Click bloom — localized brightening on the hemisphere facing uClickDir.
+    // Click bloom — tight spot centered on uClickDir. Raising the
+    // smoothstep lower bound from 0.25 → 0.75 narrows the lit cone
+    // from ~76° to ~41°, so the bloom reads as a focused touch rather
+    // than a whole-hemisphere glow.
     vec3 localNormal = normalize(vLocalPosition);
-    float clickBoost = smoothstep(0.25, 1.0, dot(localNormal, uClickDir)) * uClickStrength;
-    finalColor += uPrimaryColor * clickBoost * 0.7;
-    alpha = clamp(alpha + clickBoost * 0.35, 0.0, 1.0);
+    float clickBoost = smoothstep(0.75, 1.0, dot(localNormal, uClickDir)) * uClickStrength;
+    finalColor += uPrimaryColor * clickBoost * 0.9;
+    alpha = clamp(alpha + clickBoost * 0.4, 0.0, 1.0);
 
     gl_FragColor = vec4(finalColor, alpha);
   }
@@ -226,11 +229,11 @@ const atmosphereFragmentShader = /* glsl */ `
     float gradT = smoothstep(0.0, 0.85, vdn);
     vec3 haloColor = mix(uColorSecondary, uColor, gradT);
 
-    // Click bloom — amplify halo on the clicked hemisphere AND pull the
-    // color toward pure primary so the lit area reads hotter.
-    float clickBoost = smoothstep(0.0, 1.0, dot(normalize(vLocalPos), uClickDir)) * uClickStrength;
-    alpha *= (1.0 + clickBoost * 2.5);
-    haloColor = mix(haloColor, uColor * 1.2, clickBoost * 0.6);
+    // Click bloom — matched to the tight cone in the core shader; lit
+    // area on the halo is a focused spot rather than a wide arc.
+    float clickBoost = smoothstep(0.6, 1.0, dot(normalize(vLocalPos), uClickDir)) * uClickStrength;
+    alpha *= (1.0 + clickBoost * 3.0);
+    haloColor = mix(haloColor, uColor * 1.25, clickBoost * 0.7);
 
     gl_FragColor = vec4(haloColor, alpha);
   }
