@@ -73,6 +73,7 @@ from a2a.server import register_a2a_routes
 from agent.backchannel import BackchannelController
 from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
+from agent.micro_ack import MicroAckInjector
 from agent.echo_guard import (
     ECHO_GUARD_MS,
     HALF_DUPLEX,
@@ -417,6 +418,11 @@ async def run_bot(webrtc_connection) -> None:
         # that resolve within the grace window as coughs / backchannels /
         # background noise. Real interrupts still fire, just confirmed.
         BargeInGate(),
+        # Micro-ack injector — if the main pipeline hasn't produced audio
+        # within ~500 ms of UserStoppedSpeaking, emit a quiet "mm" / "hm"
+        # so the agent feels responsive on slow turns. Cancels when the
+        # bot actually starts speaking. Vapi Fill Injection pattern.
+        MicroAckInjector(tts_backend=tts_backend),
         # Both placed after the gate — they need TranscriptionFrames and
         # VAD frames produced by the aggregator. Push downstream into TTS.
         backchannel,

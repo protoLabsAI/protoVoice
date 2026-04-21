@@ -74,6 +74,10 @@ A separate channel for *listener* acks ("mm-hmm", "yeah") fired DURING the user'
 
 These are necessarily separate from the LLM's response stream because the agent isn't speaking a turn at all in this moment — the user is.
 
+## Micro-ack
+
+A tiny acoustic acknowledgement (`mm` / `mhm` / `hm` / `okay`) fired ~500 ms after `UserStoppedSpeakingFrame` **only if** the main pipeline hasn't produced audio yet. Vapi's "Fill Injection" pattern. Implemented by `MicroAckInjector` (`agent/micro_ack.py`). Cancels when `BotStartedSpeakingFrame` fires, so fast turns never hear it. Plays via `TTSSpeakFrame(append_to_context=False)` so it serializes before the main response (no overlap) and never enters LLM context. Fish backend wraps with `[softly]` for a quieter delivery; other backends use plain text.
+
 ## Backend-aware rendering
 
 Both the inline preamble (via the prompt's style block) and the generator paths (progress + backchannel) render differently per TTS backend:
