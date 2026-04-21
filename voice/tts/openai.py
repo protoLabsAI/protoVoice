@@ -34,6 +34,9 @@ def make(*, voice: str | None = None, **_unused) -> OpenAITTSService:
         f"TTS backend: openai @ {OPENAI_TTS_URL} model={OPENAI_TTS_MODEL} "
         f"voice={chosen_voice}"
     )
+    # OpenAI TTS takes plain text — filter out any Fish-style prosody
+    # tags the LLM emitted so they aren't spoken as brackets.
+    from agent.prosody import ProsodyTextFilter
     return OpenAITTSService(
         api_key=OPENAI_TTS_API_KEY,
         base_url=OPENAI_TTS_URL,
@@ -43,6 +46,7 @@ def make(*, voice: str | None = None, **_unused) -> OpenAITTSService:
             voice=chosen_voice,
             language=None,
         ),
+        text_filters=[ProsodyTextFilter()],
     )
 
 

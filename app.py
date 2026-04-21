@@ -422,17 +422,16 @@ async def run_bot(webrtc_connection) -> None:
         backchannel,
         delivery,
         llm,
-        # Backends that can't consume prosody tags need them stripped
-        # before the TTS call; Fish consumes `[softly]` / `[pause:300]`
-        # directly as control tokens, so pass those through.
-        *([ProsodyTagStripper()] if tts_backend != "fish" else []),
+        # Non-Fish TTS services strip tags at the service level via their
+        # text_filters= kwarg (see voice/tts/{kokoro,openai}.py). Fish
+        # consumes `[softly]` / `[pause:300]` natively, so its adapter
+        # doesn't filter.
         tts,
         transport.output(),
-        # Strip Fish-style prosody tags ([softly], [pause:300ms], …) from
-        # TextFrames BEFORE the assistant aggregator sees them, so tags
-        # don't accumulate in LLM context for future turns. Fish has
-        # already spoken the tags; Kokoro/OpenAI strip them at the adapter
-        # level. This is the context-safety net.
+        # Strip Fish-style prosody tags from TextFrames before the
+        # assistant aggregator sees them, so tags don't accumulate in LLM
+        # context for future turns. Applies regardless of backend — safety
+        # net for whatever the LLM emitted.
         ProsodyTagStripper(),
         assistant_agg,
         # Memory sits at the tail so it observes LLMFullResponseEndFrame on

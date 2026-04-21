@@ -10,6 +10,8 @@ from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
 
+from agent.prosody import ProsodyTextFilter
+
 logger = logging.getLogger(__name__)
 
 KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
@@ -44,6 +46,9 @@ class LocalKokoroTTS(TTSService):
             "settings",
             TTSSettings(model="kokoro-82m", voice=voice, language=None),
         )
+        # Kokoro can't interpret Fish-style `[tags]` / SSML — filter them
+        # out of the synthesis input so they aren't spoken as brackets.
+        kwargs.setdefault("text_filters", [ProsodyTextFilter()])
         super().__init__(
             sample_rate=KOKORO_SR,
             push_stop_frames=True,

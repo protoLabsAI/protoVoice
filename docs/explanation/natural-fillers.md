@@ -78,8 +78,10 @@ These are necessarily separate from the LLM's response stream because the agent 
 
 Both the inline preamble (via the prompt's style block) and the generator paths (progress + backchannel) render differently per TTS backend:
 
-- **Fish Audio S2-Pro** — supports 15,000+ inline prosody tags. The prompt block tells the LLM to use `[softly]`, `[pause]`, `[hmm]`, `[thinking]`, `[whisper]` sparingly. Output looks like `[softly] hmm, let me check`.
-- **Kokoro 82M** — no inline tag support; bracketed tags get spoken as literal syllables. The prompt block forbids brackets and forces plain text. Output looks like `okay, let me check`.
+- **Fish Audio S2-Pro** — supports 15,000+ inline prosody tags. The prompt block tells the LLM to use `[softly]`, `[pause:Xms]`, `[hmm]`, `[thinking]`, `[whisper]` sparingly, pairing a filler with a ~300 ms pause ([research-backed: fillers alone read fake, fillers + pauses cross the uncanny valley](https://www.sesame.com/research/crossing_the_uncanny_valley_of_voice)). Output looks like `[softly] hmm, [pause:300] let me check`.
+- **Kokoro 82M / OpenAI TTS** — no inline tag support; brackets would be spoken as literal syllables. The prompt block forbids brackets and forces plain text. Additionally, each adapter plugs `ProsodyTextFilter` into pipecat's `text_filters=` kwarg, so any tag the LLM emits anyway gets stripped before synthesis.
+
+Regardless of backend, `ProsodyTagStripper` sits between `transport.output()` and `assistant_agg` so tags never leak into LLM conversation history — the context stays clean even though Fish spoke them.
 
 The skill's `tts_backend` field at session-start time decides which style block goes into the prompt.
 
