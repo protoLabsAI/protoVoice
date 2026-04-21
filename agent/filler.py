@@ -93,6 +93,40 @@ _PREAMBLE_LENGTH_BY_VERBOSITY: dict[Verbosity, str | None] = {
     Verbosity.CHATTY: "Up to 12 words. Slightly expressive. May add a tiny acknowledgement of the topic.",
 }
 
+# CHI 2025 (Kim et al.): optimal spoken summary is 18-25 words; past 40
+# words, users barge in or skip 3× more often. Lead with the top fact,
+# offer a follow-up door instead of dumping details.
+_RESPONSE_LENGTH_BY_VERBOSITY: dict[Verbosity, str] = {
+    Verbosity.SILENT: "10 to 15 words. One sentence. Top fact only. No follow-up offer.",
+    Verbosity.BRIEF: "12 to 18 words. One short sentence. Top fact + optional 'want more?'.",
+    Verbosity.NARRATED: "18 to 25 words. Top fact + one supporting detail + 'want the details?' if relevant.",
+    Verbosity.CHATTY: "25 to 40 words. Top fact + two supporting details + a warm follow-up offer.",
+}
+
+
+def tool_response_block(verbosity: Verbosity) -> str:
+    """Returns the POST-TOOL RESPONSE block appended to every persona's
+    system prompt. Keeps spoken replies from tool results tight and voice-
+    appropriate — long prose reads as noise in audio, CHI 2025 found 3×
+    higher skip/barge-in rate past 40 words.
+    """
+    length = _RESPONSE_LENGTH_BY_VERBOSITY[verbosity]
+    return f"""\
+## POST-TOOL RESPONSE — spoken answers stay tight
+
+When a tool returns and you speak the answer to the user, keep the reply
+SHORT and voice-first:
+
+  - Length: {length}
+  - Lead with the single most-relevant fact. No preamble.
+  - Never dump URLs, bullet lists, tables, or numbered steps — they read
+    as noise in audio. If the user wants detail, offer to pull it
+    ("want the details?" / "I can read the full list if you'd like").
+  - Cut courtesies ("I found the following information that you might
+    find interesting…"). The user asked; they want the answer.
+  - Prefer whole sentences over fragments.
+"""
+
 
 def tool_use_block(verbosity: Verbosity, tts_backend: str) -> str:
     """Returns the TOOL USE section appended to every persona's system

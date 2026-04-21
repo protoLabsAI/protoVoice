@@ -8,16 +8,18 @@ Pre-tool acknowledgements ("hmm, let me check") are now emitted by the LLM **inl
 
 ## Levels
 
-Each level rewrites the TOOL USE block in the system prompt:
+Each level rewrites two blocks in the system prompt — **preamble** (while a tool runs) and **post-tool response** (the spoken answer):
 
-| Level | Preamble length | Effect |
+| Level | Preamble | Post-tool response |
 |:------|:---|:---|
-| `silent` | (none) | LLM is instructed to skip the preamble entirely; tools dispatch silently |
-| `brief` *(default)* | 2-4 words | "one sec" / "let me see" — casual, low energy |
-| `narrated` | 4-8 words | "okay, let me look that up" — warm, natural |
-| `chatty` | up to 12 words | "good question, let me dig into that for you" — slightly expressive |
+| `silent` | (none) | 10-15 words; top fact only, no follow-up offer |
+| `brief` *(default)* | 2-4 words — "one sec" | 12-18 words; fact + "want more?" |
+| `narrated` | 4-8 words — "okay, let me look that up" | 18-25 words; fact + one supporting detail + follow-up |
+| `chatty` | up to 12 words | 25-40 words; fact + two details + warm follow-up |
 
-The model writes its own preamble each time, conditioned on the user's actual message. There's no phrase pool. Examples in the prompt are explicitly marked "do NOT copy verbatim."
+Post-tool response sizing is backed by CHI 2025 (Kim et al., "Listening vs Reading: Information Density in Voice UIs") — optimal spoken summary is 18-25 words, and past 40 words users barge-in or skip 3× more often.
+
+The model writes its own preamble + answer each time, conditioned on the user's actual message. There's no phrase pool. Examples in the prompt are explicitly marked "do NOT copy verbatim."
 
 ## Latency tiers gate progress narration
 
