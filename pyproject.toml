@@ -1,6 +1,6 @@
 [project]
 name = "protovoice"
-version = "0.1.0"
+version = "0.2.0"
 description = "Duplex voice agent on Pipecat — Whisper STT + Qwen LLM + Fish/Kokoro TTS"
 requires-python = ">=3.11"
 dependencies = [
