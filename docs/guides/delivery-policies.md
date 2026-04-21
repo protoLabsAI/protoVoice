@@ -2,15 +2,28 @@
 
 Tools can return results in three different ways. Verbosity controls *how chatty* the filler is; delivery policy controls *when* the real result gets spoken.
 
+## Priority (the front-door API)
+
+Callers normally pass a **priority** — the controller maps it to the right policy. Priority model matches Apple's [UNNotificationInterruptionLevel](https://developer.apple.com/documentation/usernotifications/unnotificationinterruptionlevel):
+
+| Priority | Auto-maps to | Use for |
+|:---|:---|:---|
+| `critical` | `now` | Hard alerts the user must hear immediately |
+| `time_sensitive` | `next_silence` | Normal push results — wait for the next pause |
+| `active` *(default)* | `when_asked` | Results that matter only if the user comes back to the topic |
+| `passive` | `when_asked` (TODO: dedicated digest) | Low-signal background info, hold for a digest |
+
+Explicit `policy=` still wins if a caller needs to override the mapping.
+
 ## The three policies
 
 | Policy | When it speaks | Use for |
 |:---|:---|:---|
-| `now` | Immediately — interrupting the user if they're speaking | Urgent alerts, hard deadlines, user explicitly asked "let me know ASAP" |
-| `next_silence` *(default)* | Next VAD-detected user silence + 600 ms settle | Normal push results — keeps the conversation polite |
+| `now` | Immediately — interrupting the user if they're speaking | Urgent alerts, hard deadlines |
+| `next_silence` | Next VAD-detected user silence + 600 ms settle | Normal push results |
 | `when_asked` | Only if the user's next utterance contains a query keyword | Background lookups that might not matter anymore |
 
-`next_silence` is the default for async tools. `now` and `when_asked` are opt-in via the tool handler's call to `controller.deliver(...)`.
+`now` and `when_asked` are opt-in via `controller.deliver(..., priority=)` or by passing `policy=` directly.
 
 ## How it plumbs
 
@@ -39,7 +52,7 @@ The tool handler passes keywords derived from the original query:
 
 ```python
 keywords = tuple(w for w in query.split() if len(w) > 3)
-await controller.deliver(phrase, policy=DeliveryPolicy.WHEN_ASKED, keywords=keywords)
+await controller.deliver(phrase, priority=Priority.ACTIVE, keywords=keywords)
 ```
 
 Matching is a naive case-insensitive substring search. If any keyword appears in the user's next utterance, the result drops. No synonyms, no stemming. A smarter matcher (embedding similarity) is an obvious upgrade.

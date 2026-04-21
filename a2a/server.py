@@ -22,7 +22,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from agent.delivery import DeliveryController, DeliveryPolicy
+from agent.delivery import DeliveryController, DeliveryPolicy, Priority
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +204,7 @@ def register_a2a_routes(
             return {"ok": True, "delivered": False, "reason": "no active session"}
 
         phrase = f"Heads up — {caller} got back to us. {text}"
-        await delivery.deliver(phrase, policy=DeliveryPolicy.NEXT_SILENCE)
+        await delivery.deliver(phrase, priority=Priority.TIME_SENSITIVE)
         return {"ok": True, "delivered": True}
 
 

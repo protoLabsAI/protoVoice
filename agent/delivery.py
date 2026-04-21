@@ -53,10 +53,34 @@ class DeliveryPolicy(str, Enum):
     WHEN_ASKED = "when_asked"
 
 
+class Priority(str, Enum):
+    """Apple UNNotificationInterruptionLevel-shaped urgency. Callers
+    specify this at enqueue time; the controller auto-maps it to a
+    delivery policy. Explicit `policy=` still wins if supplied."""
+
+    CRITICAL = "critical"             # hard-interrupt anything
+    TIME_SENSITIVE = "time_sensitive" # drain on the next natural pause
+    ACTIVE = "active"                 # wait for the user to reference it
+    PASSIVE = "passive"               # low-signal; hold for later
+
+
+# Auto-map priority → policy when caller doesn't force one.
+_PRIORITY_TO_POLICY: dict[Priority, DeliveryPolicy] = {
+    Priority.CRITICAL: DeliveryPolicy.NOW,
+    Priority.TIME_SENSITIVE: DeliveryPolicy.NEXT_SILENCE,
+    Priority.ACTIVE: DeliveryPolicy.WHEN_ASKED,
+    # TODO: PASSIVE → dedicated DIGEST policy once the digest surface
+    # exists. For now treat as when-asked (so it emits if the user brings
+    # it up) but don't drain on silence.
+    Priority.PASSIVE: DeliveryPolicy.WHEN_ASKED,
+}
+
+
 @dataclass
 class _Pending:
     phrase: str
     policy: DeliveryPolicy
+    priority: Priority = Priority.ACTIVE
     keywords: tuple[str, ...] = ()
     enqueued_at: float = field(default_factory=time.time)
 
@@ -87,20 +111,33 @@ class DeliveryController(FrameProcessor):
         self,
         phrase: str,
         *,
-        policy: DeliveryPolicy = DeliveryPolicy.NEXT_SILENCE,
+        priority: Priority = Priority.ACTIVE,
+        policy: DeliveryPolicy | None = None,
         keywords: tuple[str, ...] = (),
     ) -> None:
-        """Deliver `phrase` according to the given policy.
+        """Deliver `phrase` according to its urgency.
 
-        For NOW: emit immediately (interrupting the user if they're speaking).
-        For NEXT_SILENCE / WHEN_ASKED: queue; emit when conditions are met.
+        Typical call: pass only `priority=` and let the controller map to
+        the right policy. Pass explicit `policy=` to override.
+
+        Policy semantics:
+          NOW           — emit immediately (interrupts user if they're speaking)
+          NEXT_SILENCE  — queue; emit when the user pauses
+          WHEN_ASKED    — queue; emit only when the user's transcript
+                          references one of `keywords`
         """
-        policy = DeliveryPolicy(policy)
-        logger.info(f"[delivery] enqueue {policy.value}: {phrase[:60]!r}")
-        if policy is DeliveryPolicy.NOW:
+        priority = Priority(priority)
+        effective_policy = DeliveryPolicy(policy) if policy is not None else _PRIORITY_TO_POLICY[priority]
+        logger.info(
+            f"[delivery] enqueue priority={priority.value} policy={effective_policy.value}: "
+            f"{phrase[:60]!r}"
+        )
+        if effective_policy is DeliveryPolicy.NOW:
             await self._emit(phrase)
             return
-        self._pending.append(_Pending(phrase=phrase, policy=policy, keywords=keywords))
+        self._pending.append(
+            _Pending(phrase=phrase, policy=effective_policy, priority=priority, keywords=keywords)
+        )
         # If the user isn't currently speaking and there's something eligible
         # for NEXT_SILENCE, drain right away.
         if not self._user_speaking:
