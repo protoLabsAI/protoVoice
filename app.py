@@ -60,6 +60,10 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.frameworks.rtvi import (
+    RTVIObserverParams,
+    RTVIProcessor,
+)
 from pipecat.utils.context.llm_context_summarization import (
     LLMAutoContextSummarizationConfig,
     LLMContextSummaryConfig,
@@ -494,12 +498,23 @@ async def run_bot(webrtc_connection) -> None:
                 save_summary(skill.slug, content)
                 return
 
+    # RTVI — routes structured client↔server events over the WebRTC data
+    # channel (bot-llm-started/stopped, bot-tts-started/stopped, user-
+    # transcription, function-call-*, etc.). Server-side is wired now;
+    # the client consumer lands with the React frontend migration.
+    # Reference: https://docs.pipecat.ai/server/frameworks/rtvi
+    rtvi = RTVIProcessor(transport=transport)
+
     pipeline = Pipeline([
         transport.input(),
         # Echo-guard sits IMMEDIATELY after transport.input — drops mic
         # audio while the bot is speaking (HALF_DUPLEX) and for ECHO_GUARD_MS
         # after it stops. VAD downstream never sees the suppressed audio.
         EchoGuardSuppressor(_ECHO_STATE),
+        # RTVI processor near the top — forwards inbound client messages
+        # (config, custom actions) into the pipeline and exposes the
+        # push-channel for the observer.
+        rtvi,
         stt,
         user_agg,
         # Adaptive barge-in gate — suppresses VAD-triggered interrupts
@@ -546,7 +561,14 @@ async def run_bot(webrtc_connection) -> None:
         params=PipelineParams(enable_metrics=True),
         # Observers see every frame at the pipeline level without
         # being a transformation node.
-        observers=[EchoGuardObserver(_ECHO_STATE), turn_tracer],
+        observers=[
+            EchoGuardObserver(_ECHO_STATE),
+            turn_tracer,
+            # RTVI observer emits structured client messages (bot-llm-*,
+            # bot-tts-*, user-*, function-call-*). Client consumption
+            # will land with the React frontend migration.
+            rtvi.create_rtvi_observer(params=RTVIObserverParams()),
+        ],
     )
 
     # Wire the delivery + backchannel controllers' out-of-band emit paths
