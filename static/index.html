@@ -747,18 +747,16 @@
       idleHint.classList.remove('show');
       setStatus("requesting mic...");
       try {
-        // Disable browser mic DSP. Defaults are autoGainControl + noiseSuppression
-        // + echoCancellation = true, all of which drift the signal over a
-        // session (AGC ramps gain on quiet stretches, NS/EC adapt without a
-        // clean reference when the bot plays through speakers). That drift
-        // produces a user-voice envelope that gets twitchier over time.
-        // Pipecat already does STT-side VAD + optional echo guard + rnnoise,
-        // so we want the raw mic here.
+        // Disable the two adaptive mic-DSP blocks that drifted the viz
+        // signal over time: AGC (ramps gain on quiet stretches) and NS
+        // (learns noise floor). echoCancellation is LEFT ON — essential
+        // for users speaking over speakers (no headphones), otherwise
+        // the bot's audio feeds back into the mic and the server-side
+        // VAD loops on itself.
         localStream = await navigator.mediaDevices.getUserMedia({
           audio: {
             autoGainControl: false,
             noiseSuppression: false,
-            echoCancellation: false,
           },
         });
       } catch (_e) {
