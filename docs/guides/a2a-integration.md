@@ -79,11 +79,11 @@ Response:
 
 Reuse the same `contextId` across turns. protoVoice keeps a bounded buffer (`A2A_MAX_TURNS`, default 10) per context so the conversation stays coherent without growing unbounded.
 
-### Known limits (M6)
+### Known limits (inbound)
 
-- **No streaming** (`message/stream`). Synchronous only. Plan: add streaming once the inbound tool-loop lands.
-- **No tool calls in the inbound path.** The text agent is a one-shot chat turn; it can't use `web_search` or `a2a_dispatch`. The voice side uses them freely. Add the ReAct loop if you need tools via A2A.
+- **No tool calls in the inbound path.** The text agent is a one-shot chat turn; it can't use `web_search` or `delegate_to`. The voice side uses them freely.
 - **No task lifecycle** (`tasks/get`, `tasks/cancel`). Only `message/send`.
+- **No inbound streaming.** Our server responds with a single-shot Task; streaming outbound is fully wired, inbound isn't yet.
 
 ## Outbound — we call another agent
 
@@ -91,21 +91,29 @@ See [Tools → delegate_to](/reference/tools#delegate_to) and the [Delegates ref
 
 Outbound A2A is one branch of the unified `delegate_to(target, query)` tool. Targets are configured in `config/delegates.yaml`; each entry sets `type: a2a` and provides a URL + auth. The LLM picks the target by name based on the description.
 
-## The callback endpoint
+### Streaming (SSE)
 
-`POST /a2a/callback` — receives push-notification results from agents we dispatched to. If an active voice session is running, the result is spoken via the `DeliveryController` with `next_silence` policy:
+Outbound dispatch **prefers `message/stream`** per the [A2A streaming spec](https://a2a-protocol.org/latest/topics/streaming-and-async/). Each `TaskStatusUpdateEvent` with a human-readable message is narrated through the voice pipeline via `delivery.speak_now(source=target)` — users hear "ava: still compiling the sitrep…" in-flight instead of silent waiting. Falls back to `message/send` on SSE errors.
 
-```bash
-curl -X POST http://localhost:7867/a2a/callback \
-  -H "Content-Type: application/json" \
-  -d '{"from":"ava","text":"status report complete; all green"}'
-```
+### Push-notification callbacks
 
-When no session is active, the callback returns `{"ok": true, "delivered": false, "reason": "no active session"}` — the caller can then decide to retry or drop the result.
+When `A2A_PUSH_URL` + `A2A_PUSH_TOKEN` are set, outbound dispatches attach a `pushNotificationConfig` pointing at our `/a2a/push` endpoint. If the SSE stream drops, or the remote agent completes after we disconnect, they call us back:
 
-::: tip
-Current outbound dispatch is **synchronous** (our client waits for the response). Pushing through the callback path requires the caller agent to support push notifications — see `pushNotificationConfig` in the A2A spec. Outbound-with-callback wiring is planned for M7+.
-:::
+- Terminal states (`completed` / `failed` / `cancelled`) → `Priority.TIME_SENSITIVE`
+- `input-required` / `auth-required` → `Priority.CRITICAL` (interrupts)
+- Mid-task `TaskStatusUpdateEvent` → `Priority.ACTIVE` (wait for the user to ask)
+
+If no voice session is live when a push arrives, the payload is stashed under the active skill slug and replayed at the next connect — see [Delivery Policies → Cross-session replay](/guides/delivery-policies#cross-session-replay-reconnect).
+
+### Auth on `/a2a/push`
+
+If `A2A_PUSH_TOKEN` is set, requests must include the matching token either as `Authorization: Bearer <token>` or as `{"token": "…"}` in the body. Token mismatch → 401. When unset (local dev), no auth is enforced — useful for homelab but don't expose that setup to the open internet.
+
+JWT + JWKS signature verification (per A2A spec's recommended pattern) is a future upgrade; shared-secret mode is the current shipping baseline.
+
+### The legacy `/a2a/callback`
+
+`POST /a2a/callback` predates the spec-aligned `/a2a/push` route and stays for backwards compat with the simpler `{"from":"ava","text":"…"}` payload shape. New integrations should target `/a2a/push`.
 
 ## Testing locally
 

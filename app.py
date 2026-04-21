@@ -400,11 +400,19 @@ async def run_bot(webrtc_connection) -> None:
             t = progress_tasks.pop()
             t.cancel()
 
+    # D17: attach pushNotificationConfig on outbound A2A so remote agents
+    # can call us back via /a2a/push even if the SSE stream dropped.
+    # Env-driven — if A2A_PUSH_URL isn't set (typical local dev), the
+    # config is omitted and outbound A2A is stream-only.
+    _push_url = os.environ.get("A2A_PUSH_URL") or None
+    _push_token = os.environ.get("A2A_PUSH_TOKEN") or None
     tools_schema = register_tools(
         llm,
         on_finish=_cancel_progress,
         delivery=delivery,
         delegates=_DELEGATES,
+        push_notification_url=_push_url,
+        push_notification_token=_push_token,
     )
 
     # Per-skill tool restriction. If skill.tools is non-empty, scope the

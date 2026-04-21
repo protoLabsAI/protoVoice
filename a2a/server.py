@@ -27,6 +27,10 @@ from agent.delivery import DeliveryController, DeliveryPolicy, Priority
 logger = logging.getLogger(__name__)
 
 A2A_AUTH_TOKEN = os.environ.get("A2A_AUTH_TOKEN", "")  # shared secret for inbound auth
+# Shared secret for /a2a/push callbacks — we expect remote agents to
+# echo this back in their PushNotificationConfig.token or
+# Authorization: Bearer header. Generated on first use if empty.
+A2A_PUSH_TOKEN = os.environ.get("A2A_PUSH_TOKEN", "")
 AGENT_NAME = os.environ.get("AGENT_NAME", "protovoice")
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "0.1.0")
 
@@ -183,6 +187,96 @@ def register_a2a_routes(
                 },
             }
         )
+
+    @app.post("/a2a/push")
+    async def _a2a_push(request: Request):
+        """A2A spec-conformant push-notification endpoint.
+
+        Accepts a StreamResponse-shaped JSON body (task / message /
+        task-status-update / task-artifact-update per
+        https://a2a-protocol.org/latest/topics/streaming-and-async/).
+
+        Auth: we expect the sender to echo back the `token` we included
+        in our outbound `pushNotificationConfig`. If A2A_PUSH_TOKEN is
+        set in env, it must match either:
+          - `Authorization: Bearer <token>` header, OR
+          - `token` field in the request body.
+
+        Priority routing:
+          status-update                 → active
+          artifact-update / terminal    → time_sensitive
+          input-required / auth-required → critical
+        """
+        # Token validation — skipped if env var not set (dev-mode default).
+        if A2A_PUSH_TOKEN:
+            auth = request.headers.get("authorization", "")
+            token_hdr = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+            try:
+                body_peek = await request.json()
+            except Exception:
+                return JSONResponse(status_code=400, content={"error": "invalid json"})
+            token_body = str(body_peek.get("token") or "")
+            if A2A_PUSH_TOKEN not in (token_hdr, token_body):
+                logger.warning("[a2a/push] auth rejected — token mismatch")
+                return JSONResponse(status_code=401, content={"error": "unauthorized"})
+            body = body_peek
+        else:
+            try:
+                body = await request.json()
+            except Exception:
+                return JSONResponse(status_code=400, content={"error": "invalid json"})
+
+        # Extract the event kind + text payload.
+        result = body.get("result") or body
+        kind = (result.get("kind") or result.get("type") or "").lower()
+        caller = body.get("from") or body.get("agent") or result.get("agent") or "delegate"
+
+        text: str = ""
+        priority = Priority.ACTIVE
+        if kind in ("task-status-update", "taskstatusupdate", "status-update"):
+            status = result.get("status") or {}
+            msg = status.get("message") or {}
+            for part in msg.get("parts") or []:
+                if (part.get("kind") or part.get("type")) == "text":
+                    text = part.get("text") or ""
+                    break
+            state = (status.get("state") or "").lower()
+            if state in ("input-required", "auth-required"):
+                priority = Priority.CRITICAL
+            elif state in ("completed", "failed", "cancelled", "rejected"):
+                priority = Priority.TIME_SENSITIVE
+        elif kind in ("task-artifact-update", "taskartifactupdate", "artifact-update"):
+            artifact = result.get("artifact") or {}
+            for part in artifact.get("parts") or []:
+                if (part.get("kind") or part.get("type")) == "text":
+                    text = part.get("text") or ""
+                    break
+            priority = Priority.TIME_SENSITIVE
+        elif kind in ("task", "message"):
+            text = _extract_text_from_any(result) or _extract_text_from_any(body)
+            priority = Priority.TIME_SENSITIVE
+        else:
+            # Unknown shape — fall back to the permissive extractor.
+            text = _extract_text_from_any(body)
+
+        logger.info(f"[a2a/push] kind={kind!r} from={caller!r} len={len(text)} priority={priority.value}")
+        if not text:
+            return {"ok": True, "delivered": False, "reason": "no text"}
+
+        delivery = delivery_provider() if delivery_provider else None
+        if delivery is None:
+            from agent.session_store import stash_delivery
+            slug = skill_slug_provider() if skill_slug_provider else "default"
+            stash_delivery(slug, {
+                "phrase": f"{caller} says — {text}",
+                "policy": "next_silence" if priority is not Priority.CRITICAL else "now",
+                "priority": priority.value,
+                "keywords": [],
+            })
+            return {"ok": True, "delivered": False, "stashed": True}
+
+        await delivery.deliver(text, priority=priority, source=caller)
+        return {"ok": True, "delivered": True}
 
     @app.post("/a2a/callback")
     async def _a2a_callback(request: Request):
