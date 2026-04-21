@@ -273,7 +273,9 @@ const ENV_BOT  = { attack: 0.25, release: 0.10 };  // smoother AI pump
 const DISP_ALPHA = 0.10;
 
 // Byte-domain RMS scaling. Silence is ~0.003, shouting peaks ~0.35.
-const NORM_FLOOR = 0.020;
+// Floor is 0.025 to give a safety margin above ambient hiss now that the
+// browser's AGC is disabled (mic gain is fixed, ambient stays well below).
+const NORM_FLOOR = 0.025;
 const NORM_CEIL  = 0.300;
 
 // State machine thresholds (on the normalized envelope, not raw RMS).
@@ -803,7 +805,10 @@ export class VoiceOrb {
     // Multipliers deliberately soft — the orb should breathe with the voice,
     // not pulse to every transient. Too strong = jitter; too weak = dead.
     this.uniforms.uDensity.value           = s.density + dBot * 0.9;
-    this.uniforms.uAsymmetry.value         = clamp01(s.asymmetry + dUser * 0.15);
+    // Asymmetry changes fractal STRUCTURE (per-iteration rotation), so even
+    // small input jitter propagates multiplicatively through the folds and
+    // reads as twitchy. Keep the user pump tiny (0.06, was 0.15).
+    this.uniforms.uAsymmetry.value         = clamp01(s.asymmetry + dUser * 0.06);
     this.uniforms.uInternalAnim.value      = s.internalAnim * (1 + dBot * 0.18);
     this.atmosphereUniforms.uGlow.value    = s.glow + dBot * 1.1 + dUser * 0.35;
     this.caPass.uniforms.uAmount.value     = Math.min(0.05, s.ca + dBot * 0.008);
