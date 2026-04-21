@@ -476,6 +476,7 @@ export class VoiceOrb {
     this._raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
     this._dragging = false;
+    this._holding = false;            // pointer is down — keeps bloom lit at cursor
     this._dragMoved = 0;              // px of movement since pointerdown
     this._lastPointer = { x: 0, y: 0, t: 0 };
     this._dragVel = { x: 0, y: 0 };   // radians per second, decays when idle
@@ -498,35 +499,38 @@ export class VoiceOrb {
     const down = (e) => {
       dom.setPointerCapture(e.pointerId);
       this._dragging = true;
+      this._holding = true;
       this._dragMoved = 0;
       this._lastPointer = { x: e.clientX, y: e.clientY, t: performance.now() };
       this._dragVel.x = 0;
       this._dragVel.y = 0;
+      // Bloom tracks the cursor immediately on press.
+      this._pulseAt(e.clientX, e.clientY);
     };
     const move = (e) => {
       if (!this._dragging) return;
       const nowMs = performance.now();
-      const dt = Math.max(1, nowMs - this._lastPointer.t) / 1000;  // seconds, min 1ms
+      const dt = Math.max(1, nowMs - this._lastPointer.t) / 1000;
       const dx = e.clientX - this._lastPointer.x;
       const dy = e.clientY - this._lastPointer.y;
       this._dragMoved += Math.hypot(dx, dy);
-      const SENSITIVITY = 0.006;      // radians per pixel
+      const SENSITIVITY = 0.006;
       this.orb.rotation.y += dx * SENSITIVITY;
       this.orb.rotation.x += dy * SENSITIVITY;
-      // Velocity for momentum — exponential smoothing so a tiny final
-      // micro-move doesn't clobber a big fling.
       const instVy = (dx * SENSITIVITY) / dt;
       const instVx = (dy * SENSITIVITY) / dt;
       this._dragVel.y = lerp(this._dragVel.y, instVy, 0.5);
       this._dragVel.x = lerp(this._dragVel.x, instVx, 0.5);
       this._lastPointer = { x: e.clientX, y: e.clientY, t: nowMs };
+      // Bloom follows the cursor while the pointer is down.
+      this._pulseAt(e.clientX, e.clientY);
     };
     const up = (e) => {
       if (!this._dragging) return;
       this._dragging = false;
+      this._holding = false;
       try { dom.releasePointerCapture(e.pointerId); } catch (_) {}
-      // If movement was tiny, treat as click → pulse the orb at that spot.
-      if (this._dragMoved < 6) this._pulseAt(e.clientX, e.clientY);
+      // Strength stays at 1.0 until the _tick decay loop fades it out.
     };
 
     dom.addEventListener('pointerdown', down);
@@ -747,8 +751,8 @@ export class VoiceOrb {
       if (Math.abs(this._dragVel.y) < 0.001) this._dragVel.y = 0;
     }
 
-    // Decay click-bloom over ~0.6s.
-    if (this.uniforms.uClickStrength.value > 0) {
+    // Decay click-bloom over ~0.6s — but not while the pointer is held down.
+    if (!this._holding && this.uniforms.uClickStrength.value > 0) {
       this.uniforms.uClickStrength.value *= 0.93;
       if (this.uniforms.uClickStrength.value < 0.01) {
         this.uniforms.uClickStrength.value = 0;

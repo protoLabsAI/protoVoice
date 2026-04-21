@@ -224,23 +224,16 @@
 
     let _transientTimer = null;
     const clearTransient = () => {
-      if (_transientTimer) { clearInterval(_transientTimer); _transientTimer = null; }
+      if (_transientTimer) { clearTimeout(_transientTimer); _transientTimer = null; }
     };
     const setStatus = (t) => { clearTransient(); statusEl.textContent = t; };
     const setTransientStatus = (text, seconds = 3) => {
       clearTransient();
-      let n = seconds;
-      const render = () => { statusEl.textContent = `${text} · ${n}`; };
-      render();
-      _transientTimer = setInterval(() => {
-        n -= 1;
-        if (n <= 0) {
-          clearTransient();
-          statusEl.textContent = "";   // :empty triggers CSS opacity fade
-        } else {
-          render();
-        }
-      }, 1000);
+      statusEl.textContent = text;
+      _transientTimer = setTimeout(() => {
+        _transientTimer = null;
+        statusEl.textContent = "";   // :empty triggers CSS opacity fade
+      }, seconds * 1000);
     };
 
     let pc = null;
