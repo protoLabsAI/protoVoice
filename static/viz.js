@@ -21,7 +21,7 @@ export const PRESETS = {
   Aurora: {
     primaryEnergy: '#0ea5e9', secondaryEnergy: '#f472b6', speed: 0.5, density: 2.4, dpr: 0.7,
     atmosphereGlow: 0.18, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.80,
-    internalAnim: 0.42, fractalIters: 4, fractalScale: 0.95, fractalDecay: -17.0,
+    internalAnim: 0.42, fractalIters: 4, fractalScale: 0.85, fractalDecay: -17.0,
     smoothness: 0.032, asymmetry: 0.50, chromaticAberration: 0.022,
   },
   // Orange / indigo — classic fire/ice complementary, high energy.
