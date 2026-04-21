@@ -320,26 +320,7 @@
       transition: opacity 400ms;
     }
     #idle-hint.show { opacity: 1; }
-
-    /* --- Debug HUD ----------------------------------------------------- */
-    #debug-hud {
-      position: fixed; top: 1rem; left: 1rem; z-index: 30;
-      background: rgba(10, 10, 10, 0.85);
-      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-      border: 1px solid var(--border-strong);
-      border-radius: var(--radius);
-      padding: 0.625rem 0.75rem;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.6875rem; line-height: 1.45;
-      color: var(--fg);
-      pointer-events: none;
-      max-width: 22rem;
-      white-space: pre;
-    }
-    #debug-hud[hidden] { display: none; }
-    #debug-hud .k { color: var(--fg-subtle); }
-    #debug-hud .v { color: var(--fg); }
-    #debug-hud .hl { color: #5eead4; }
+  </style>
 </head>
 <body>
   <div id="viz"></div>
@@ -465,7 +446,6 @@
 
   <div id="status-float"></div>
   <div id="idle-hint" class="show">double-click the orb to start</div>
-  <div id="debug-hud" hidden></div>
   <audio id="audio" autoplay></audio>
 
   <script type="module">
@@ -474,61 +454,6 @@
     const PALETTE_NAMES = new Set(Object.keys(PRESETS));
     const orb = new VoiceOrb(document.getElementById('viz'), { preset: 'Aurora' });
     window.__orb = orb;
-
-    // --- Debug HUD ------------------------------------------------------
-    const hud = document.getElementById('debug-hud');
-    let debugOn = new URLSearchParams(location.search).get('debug') === '1';
-    const setHud = (on) => {
-      debugOn = on;
-      hud.hidden = !on;
-      try { localStorage.setItem('protoVoice.debug', on ? '1' : '0'); } catch (_) {}
-    };
-    try { if (localStorage.getItem('protoVoice.debug') === '1') debugOn = true; } catch (_) {}
-    hud.hidden = !debugOn;
-    document.addEventListener('keydown', (e) => {
-      // `d` toggles; ignore when typing in inputs.
-      if (e.key !== 'd' && e.key !== 'D') return;
-      const t = e.target;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
-      setHud(!debugOn);
-    });
-
-    const fmtSnap = (s) => {
-      const lines = [
-        `state: ${s.state.padEnd(10)} (${s.since_state_ms} ms, xfade=${s.xfade_active ? 'yes' : 'no'})`,
-        `env  : user=${String(s.env.user).padStart(5)}  bot=${String(s.env.bot).padStart(5)}`,
-        `       raw  u=${String(s.env.user_raw_env).padStart(5)}  b=${String(s.env.bot_raw_env).padStart(5)}`,
-        `rot  : y=${String(s.rotation.y_total_rad).padStart(8)} rad  (${s.rotation.y_visible_deg}°)`,
-        `       x=${String(s.rotation.x_total_rad).padStart(8)} rad  (${s.rotation.x_visible_deg}°)`,
-        `drag : vx=${s.drag_vel.x}  vy=${s.drag_vel.y}  ${s.drag_vel.active ? 'ACTIVE' : ''}`,
-        `shdr : uTime=${s.shader.uTime}  asym=${s.shader.uAsymmetry}  anim=${s.shader.uInternalAnim}`,
-        `       dens=${s.shader.uDensity}  glow=${s.shader.uGlow}`,
-        `snap : rot=${s.state_snap.rotation}  scale=${s.state_snap.scale}  speed=${s.state_snap.speed}`,
-      ];
-      return lines.join('\n');
-    };
-
-    // Track rotation delta between HUD polls so we can see if auto-rotate
-    // slows, reverses, or snaps.
-    let _lastRotY = 0, _lastRotX = 0, _lastSnapTime = performance.now();
-    setInterval(() => {
-      const snap = orb.getDebugSnapshot();
-      if (debugOn) hud.textContent = fmtSnap(snap);
-      const now = performance.now();
-      const dt = (now - _lastSnapTime) / 1000;
-      _lastSnapTime = now;
-      const dY = snap.rotation.y_total_rad - _lastRotY;
-      const dX = snap.rotation.x_total_rad - _lastRotX;
-      _lastRotY = snap.rotation.y_total_rad;
-      _lastRotX = snap.rotation.x_total_rad;
-      if (debugOn) {
-        // Once per second, log dY/dt and dX/dt so we can spot reversals.
-        if (!_pollCount || _pollCount % 10 === 0) {
-          console.log(`[viz] dY/s=${(dY/dt).toFixed(4)} dX/s=${(dX/dt).toFixed(4)}  state=${snap.state}  dragVel=(${snap.drag_vel.x},${snap.drag_vel.y})  uTime=${snap.shader.uTime}`);
-        }
-      }
-      _pollCount = (_pollCount || 0) + 1;
-    }, 100);
 
     // --- Drawer toggle ---------------------------------------------------
     const drawer = document.getElementById('drawer');

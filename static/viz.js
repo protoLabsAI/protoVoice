@@ -664,47 +664,6 @@ export class VoiceOrb {
 
   getParams() { return { ...this.basePreset }; }
 
-  /** Snapshot of every mutable driver for debugging the viz. */
-  getDebugSnapshot() {
-    const TWO_PI = Math.PI * 2;
-    const rotY = this.orb.rotation.y;
-    const rotX = this.orb.rotation.x;
-    return {
-      state: this.state,
-      since_state_ms: Math.round(performance.now() - this._stateEnteredMs),
-      xfade_active: this._stateXfadeActive,
-      env: {
-        user: +this._disp.user.toFixed(3),
-        bot:  +this._disp.bot.toFixed(3),
-        user_raw_env: +this._env.local.s2.toFixed(3),
-        bot_raw_env:  +this._env.remote.s2.toFixed(3),
-      },
-      rotation: {
-        y_total_rad: +rotY.toFixed(3),
-        x_total_rad: +rotX.toFixed(3),
-        y_visible_deg: +(((rotY % TWO_PI) + TWO_PI) % TWO_PI * 180 / Math.PI).toFixed(1),
-        x_visible_deg: +(((rotX % TWO_PI) + TWO_PI) % TWO_PI * 180 / Math.PI).toFixed(1),
-      },
-      drag_vel: {
-        x: +this._dragVel.x.toFixed(4),
-        y: +this._dragVel.y.toFixed(4),
-        active: this._dragging,
-      },
-      shader: {
-        uTime: +this.uniforms.uTime.value.toFixed(2),
-        uAsymmetry: +this.uniforms.uAsymmetry.value.toFixed(3),
-        uInternalAnim: +this.uniforms.uInternalAnim.value.toFixed(3),
-        uDensity: +this.uniforms.uDensity.value.toFixed(2),
-        uGlow: +this.atmosphereUniforms.uGlow.value.toFixed(2),
-      },
-      state_snap: {
-        rotation: +this._stateSnap.rotation.toFixed(3),
-        scale: +this._stateSnap.scale.toFixed(3),
-        speed: +this._stateSnap.speed.toFixed(3),
-      },
-    };
-  }
-
   attachStream(stream, kind) {
     if (!this._audioCtx) {
       this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
