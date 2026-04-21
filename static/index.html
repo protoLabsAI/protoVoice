@@ -13,16 +13,29 @@
     }
   </script>
   <style>
-    :root { color-scheme: dark; }
+    :root {
+      color-scheme: dark;
+      --bg-0: #0a0a0a;
+      --bg-1: rgba(10, 10, 10, 0.92);
+      --fg: #fafafa;
+      --fg-muted: #a1a1a1;
+      --fg-subtle: #737373;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.15);
+      --accent: #fafafa;
+      --radius: 6px;
+    }
     html, body { height: 100%; }
     body {
-      margin: 0; min-height: 100vh; background: #000; color: #e2e8f0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 0; background: #000; color: var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", sans-serif;
+      font-size: 14px; line-height: 1.5;
       overflow: hidden;
     }
     audio { display: none; }
 
-    /* --- The viewport is the orb. ---------------------------------------- */
+    /* --- Orb = the viewport -------------------------------------------- */
     #viz { position: fixed; inset: 0; z-index: 0; }
     #viz canvas {
       display: block; width: 100% !important; height: 100% !important;
@@ -30,107 +43,235 @@
     }
     #viz canvas:active { cursor: grabbing; }
 
-    /* --- Hamburger toggle ------------------------------------------------- */
+    /* --- Hamburger ----------------------------------------------------- */
     #menu-toggle {
       position: fixed; top: 1rem; right: 1rem; z-index: 25;
-      width: 2.75rem; height: 2.75rem;
-      background: rgba(10, 15, 20, 0.55);
-      -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-      border: 1px solid rgba(148, 163, 184, 0.18);
-      border-radius: 0.6rem;
-      padding: 0;
+      width: 2.25rem; height: 2.25rem; padding: 0;
+      background: var(--bg-1);
+      -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
       display: flex; flex-direction: column; justify-content: center; align-items: center;
-      gap: 5px; cursor: pointer;
-      transition: background 150ms;
+      gap: 4px; cursor: pointer;
+      transition: background 120ms, border-color 120ms;
     }
-    #menu-toggle:hover { background: rgba(20, 184, 166, 0.20); }
+    #menu-toggle:hover { border-color: var(--fg-subtle); }
     #menu-toggle span {
-      display: block; width: 1.1rem; height: 2px; background: #e2e8f0;
+      display: block; width: 0.95rem; height: 1.5px; background: var(--fg);
       border-radius: 2px;
       transition: transform 220ms cubic-bezier(0.4, 0, 0.2, 1),
                   opacity 180ms;
     }
     #menu-toggle[aria-expanded="true"] span:nth-child(1) {
-      transform: translateY(7px) rotate(45deg);
+      transform: translateY(5.5px) rotate(45deg);
     }
     #menu-toggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
     #menu-toggle[aria-expanded="true"] span:nth-child(3) {
-      transform: translateY(-7px) rotate(-45deg);
+      transform: translateY(-5.5px) rotate(-45deg);
     }
 
-    /* --- Side drawer ------------------------------------------------------ */
+    /* --- Drawer -------------------------------------------------------- */
     #drawer {
       position: fixed; top: 0; right: 0; z-index: 20;
-      width: 22rem; max-width: 88vw; height: 100vh;
-      background: rgba(10, 15, 20, 0.78);
-      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-      border-left: 1px solid rgba(148, 163, 184, 0.12);
+      width: 22rem; max-width: 92vw; height: 100vh;
+      background: var(--bg-1);
+      -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+      border-left: 1px solid var(--border);
       transform: translateX(100%);
-      transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1);
+      transition: transform 320ms cubic-bezier(0.4, 0, 0.2, 1);
       overflow-y: auto; box-sizing: border-box;
     }
     #drawer[aria-hidden="false"] { transform: translateX(0); }
-    .drawer-inner { padding: 5rem 1.5rem 1.5rem; display: grid; gap: 1rem; }
-    .drawer-inner h1 {
-      margin: 0; color: #5eead4; font-weight: 500; letter-spacing: -0.02em;
-      font-size: 1.25rem;
+    #drawer::-webkit-scrollbar { width: 8px; }
+    #drawer::-webkit-scrollbar-thumb {
+      background: var(--border-strong); border-radius: 9999px;
     }
-    .drawer-inner p { margin: 0; opacity: 0.65; font-size: 0.85rem; line-height: 1.5; }
-    .drawer-inner button.primary {
-      background: #14b8a6; color: #fff; border: 0; border-radius: 999px;
-      padding: 0.75rem 1.5rem; font-size: 0.95rem; cursor: pointer;
-      transition: background .15s;
-      justify-self: start;
-    }
-    .drawer-inner button.primary:hover { background: #0d9488; }
-    .drawer-inner button.primary:disabled { background: #475569; cursor: not-allowed; }
 
-    .row { display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 0.75rem;
-           align-items: center; font-size: 0.85rem; }
-    .row label { opacity: 0.7; }
-    select, input[type=text], input[type=file], textarea {
-      background: rgba(22, 32, 48, 0.6); color: #e2e8f0;
-      border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 0.4rem;
-      padding: 0.35rem 0.5rem; font-size: 0.85rem; width: 100%; box-sizing: border-box;
+    .drawer-inner {
+      padding: 3.75rem 1.25rem 1.5rem;
+      display: flex; flex-direction: column; gap: 1.25rem;
+    }
+    .drawer-inner h1 {
+      margin: 0; font-size: 1rem; font-weight: 600;
+      letter-spacing: -0.01em; color: var(--fg);
+    }
+    .drawer-inner h1 + p {
+      margin: 0.25rem 0 0; font-size: 0.8125rem;
+      color: var(--fg-muted); line-height: 1.45;
+    }
+
+    .section {
+      display: flex; flex-direction: column; gap: 0.625rem;
+    }
+    .section + .section {
+      padding-top: 1.125rem;
+      border-top: 1px solid var(--border);
+    }
+    .section-label {
+      font-size: 0.6875rem; font-weight: 500;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--fg-subtle);
+      margin: 0 0 0.125rem;
+    }
+
+    /* --- Primitives ---------------------------------------------------- */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      height: 2.25rem; padding: 0 1rem;
+      background: var(--fg); color: var(--bg-0);
+      border: 0; border-radius: var(--radius);
+      font-weight: 500; font-size: 0.8125rem; font-family: inherit;
+      cursor: pointer; transition: opacity 120ms;
+      align-self: start;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn.ghost {
+      background: transparent; color: var(--fg);
+      border: 1px solid var(--border-strong);
+    }
+    .btn.ghost:hover { border-color: var(--fg-subtle); opacity: 1; }
+
+    select, input[type="text"], input[type="file"], textarea {
+      background: transparent; color: var(--fg);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      padding: 0.375rem 0.5rem; font-size: 0.8125rem;
+      font-family: inherit; line-height: 1.3;
+      width: 100%; box-sizing: border-box;
+      transition: border-color 120ms;
+    }
+    select:hover, input:hover, textarea:hover {
+      border-color: var(--fg-subtle);
     }
     select:focus, input:focus, textarea:focus {
-      outline: 0; border-color: #14b8a6;
+      outline: 0; border-color: var(--fg);
+    }
+    textarea { resize: vertical; min-height: 3.5em; font-family: ui-sans-serif, system-ui, sans-serif; }
+    select { cursor: pointer; }
+
+    input[type="color"] {
+      -webkit-appearance: none; appearance: none;
+      height: 1.75rem; width: 2.5rem;
+      padding: 2px; background: transparent;
+      border: 1px solid var(--border-strong);
+      border-radius: calc(var(--radius) - 2px);
+      cursor: pointer;
+    }
+    input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+    input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
+    input[type="color"]::-moz-color-swatch { border: 0; border-radius: 2px; }
+
+    input[type="range"] {
+      -webkit-appearance: none; appearance: none;
+      width: 100%; height: 2px; padding: 0;
+      background: var(--border-strong); border: 0; border-radius: 9999px;
+      outline: none; cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 14px; height: 14px; background: var(--fg);
+      border-radius: 9999px; border: 0; cursor: pointer;
+      transition: transform 120ms;
+    }
+    input[type="range"]::-moz-range-thumb {
+      width: 14px; height: 14px; background: var(--fg);
+      border-radius: 9999px; border: 0; cursor: pointer;
+    }
+    input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.15); }
+    input[type="range"]:hover::-moz-range-thumb    { transform: scale(1.15); }
+
+    /* --- Form rows ----------------------------------------------------- */
+    .field {
+      display: grid;
+      grid-template-columns: 6.5rem 1fr;
+      gap: 0.625rem;
+      align-items: center;
+      min-height: 1.75rem;
+    }
+    .field label {
+      font-size: 0.75rem; color: var(--fg-muted);
+      white-space: nowrap;
+    }
+    .field .slider-row {
+      display: grid;
+      grid-template-columns: 1fr 3rem;
+      gap: 0.625rem;
+      align-items: center;
+    }
+    .field .slider-value {
+      font-size: 0.6875rem; color: var(--fg-subtle);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+    .field .color-row {
+      display: grid;
+      grid-template-columns: 2.5rem 1fr;
+      gap: 0.5rem; align-items: center;
+    }
+    .field .color-row input[type="text"] {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
     }
 
-    details summary { cursor: pointer; opacity: 0.75; padding: 0.3rem 0; font-size: 0.85rem; }
-    details summary:hover { opacity: 1; }
-    .clone-form { display: grid; gap: 0.5rem; margin-top: 0.5rem; padding: 0.75rem;
-      background: rgba(15, 22, 32, 0.55); border-radius: 0.5rem;
-      border: 1px solid rgba(20, 184, 166, 0.12); }
-    .clone-form label { font-size: 0.8rem; opacity: 0.75; }
-    .clone-form textarea { resize: vertical; min-height: 3em; }
-    .clone-form button {
-      background: rgba(20, 184, 166, 0.85); color: #fff; border: 0;
-      border-radius: 0.4rem; padding: 0.45rem 0.8rem;
-      font-size: 0.85rem; cursor: pointer;
+    /* --- Collapsible --------------------------------------------------- */
+    details.clone { display: flex; flex-direction: column; gap: 0.625rem; }
+    details.clone summary {
+      cursor: pointer; user-select: none;
+      font-size: 0.75rem; color: var(--fg-muted);
+      padding: 0.25rem 0;
+      list-style: none;
+      display: flex; align-items: center; gap: 0.375rem;
     }
-    .clone-status { font-size: 0.75rem; opacity: 0.65; min-height: 1.2em; }
+    details.clone summary::-webkit-details-marker { display: none; }
+    details.clone summary::before {
+      content: "›"; display: inline-block;
+      transition: transform 150ms;
+      font-size: 1rem; line-height: 1; color: var(--fg-subtle);
+    }
+    details.clone[open] summary::before { transform: rotate(90deg); }
+    details.clone summary:hover { color: var(--fg); }
+    .clone-form {
+      display: grid; gap: 0.5rem;
+      padding: 0.75rem; margin-top: 0.25rem;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .clone-form label {
+      display: flex; flex-direction: column; gap: 0.3rem;
+      font-size: 0.75rem; color: var(--fg-muted);
+    }
+    .clone-status {
+      font-size: 0.6875rem; color: var(--fg-subtle);
+      min-height: 1.1em;
+    }
 
-    /* --- Floating status pill --------------------------------------------- */
+    /* --- Floating status pill ----------------------------------------- */
     #status-float {
-      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
-      z-index: 15; font-size: 0.8rem; letter-spacing: 0.02em;
-      background: rgba(10, 15, 20, 0.5);
-      -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-      padding: 0.4rem 0.9rem; border-radius: 999px;
-      border: 1px solid rgba(148, 163, 184, 0.12);
-      pointer-events: none; transition: opacity 600ms ease;
-      opacity: 1;
+      position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%);
+      z-index: 15;
+      padding: 0.35rem 0.8rem;
+      background: var(--bg-1);
+      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+      border: 1px solid var(--border-strong);
+      border-radius: 9999px;
+      font-size: 0.75rem; color: var(--fg); letter-spacing: 0.01em;
+      pointer-events: none;
+      transition: opacity 600ms ease;
     }
     #status-float:empty { opacity: 0; }
 
-    /* --- Tiny "dbl-click to start" hint at idle --------------------------- */
     #idle-hint {
       position: fixed; top: 50%; left: 50%;
       transform: translate(-50%, calc(-50% + 11rem));
-      z-index: 12; font-size: 0.78rem; opacity: 0;
-      color: rgba(226, 232, 240, 0.6);
-      pointer-events: none; letter-spacing: 0.04em;
+      z-index: 12; font-size: 0.75rem;
+      color: var(--fg-subtle);
+      letter-spacing: 0.04em; text-transform: lowercase;
+      pointer-events: none; opacity: 0;
       transition: opacity 400ms;
     }
     #idle-hint.show { opacity: 1; }
@@ -145,52 +286,94 @@
 
   <aside id="drawer" aria-hidden="true">
     <div class="drawer-inner">
-      <h1>protoVoice</h1>
-      <p>Double-click the orb to start or stop. Drag to spin. Click to pulse.</p>
-      <button id="btn" class="primary">Start</button>
-
-      <div class="row">
-        <label for="skill" title="Applies on next Start">Skill</label>
-        <select id="skill" title="Applies on next Start"></select>
-        <label for="verbosity">Verbosity</label>
-        <select id="verbosity">
-          <option value="silent">silent</option>
-          <option value="brief" selected>brief</option>
-          <option value="narrated">narrated</option>
-          <option value="chatty">chatty</option>
-        </select>
-        <label for="viz-preset">Visual</label>
-        <select id="viz-preset">
-          <option value="Default" selected>Default</option>
-          <option value="Cyan">Cyan</option>
-          <option value="Gray">Gray</option>
-          <option value="Yellow">Yellow</option>
-          <option value="Green">Green</option>
-        </select>
+      <div>
+        <h1>protoVoice</h1>
+        <p>Double-click the orb to start or stop. Drag to spin. Hold to light up.</p>
       </div>
 
-      <details>
-        <summary>+ Clone a new voice</summary>
-        <form class="clone-form" id="clone-form">
-          <label>Audio sample (10-30s recommended)
-            <input type="file" id="clone-audio" accept="audio/*" required>
-          </label>
-          <label>Slug (lowercase letters / digits / hyphens)
-            <input type="text" id="clone-slug" placeholder="e.g. alex" required pattern="[a-z0-9][a-z0-9\-_]{1,63}">
-          </label>
-          <label>Display name (optional)
-            <input type="text" id="clone-name" placeholder="e.g. Alex">
-          </label>
-          <label>Transcript (leave empty to auto-transcribe via Whisper)
-            <textarea id="clone-transcript" placeholder="Exactly what the clip says. Accuracy matters for voice quality."></textarea>
-          </label>
-          <label>Description (optional)
-            <input type="text" id="clone-description" placeholder="e.g. Voice-cloned Alex">
-          </label>
-          <button type="submit">Clone voice</button>
-          <div class="clone-status" id="clone-status"></div>
-        </form>
-      </details>
+      <button id="btn" class="btn">Start</button>
+
+      <div class="section">
+        <div class="section-label">Session</div>
+        <div class="field">
+          <label for="skill">Skill</label>
+          <select id="skill" title="Applies on next Start"></select>
+        </div>
+        <div class="field">
+          <label for="verbosity">Verbosity</label>
+          <select id="verbosity">
+            <option value="silent">silent</option>
+            <option value="brief" selected>brief</option>
+            <option value="narrated">narrated</option>
+            <option value="chatty">chatty</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-label">Preset</div>
+        <div class="field">
+          <label for="viz-preset">Palette</label>
+          <select id="viz-preset">
+            <option value="Default" selected>Default</option>
+            <option value="Cyan">Cyan</option>
+            <option value="Gray">Gray</option>
+            <option value="Yellow">Yellow</option>
+            <option value="Green">Green</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="section" id="section-color">
+        <div class="section-label">Color</div>
+        <!-- filled by JS -->
+      </div>
+
+      <div class="section" id="section-energy">
+        <div class="section-label">Energy</div>
+        <!-- filled by JS -->
+      </div>
+
+      <div class="section" id="section-motion">
+        <div class="section-label">Motion</div>
+        <!-- filled by JS -->
+      </div>
+
+      <div class="section" id="section-fractal">
+        <div class="section-label">Fractal</div>
+        <!-- filled by JS -->
+      </div>
+
+      <div class="section" id="section-perf">
+        <div class="section-label">Performance</div>
+        <!-- filled by JS -->
+      </div>
+
+      <div class="section">
+        <details class="clone">
+          <summary>Clone a new voice</summary>
+          <form class="clone-form" id="clone-form">
+            <label>Audio sample (10–30 s)
+              <input type="file" id="clone-audio" accept="audio/*" required>
+            </label>
+            <label>Slug
+              <input type="text" id="clone-slug" placeholder="e.g. alex" required
+                pattern="[a-z0-9][a-z0-9\-_]{1,63}">
+            </label>
+            <label>Display name (optional)
+              <input type="text" id="clone-name" placeholder="e.g. Alex">
+            </label>
+            <label>Transcript (leave empty to auto-transcribe)
+              <textarea id="clone-transcript" placeholder="Exactly what the clip says."></textarea>
+            </label>
+            <label>Description (optional)
+              <input type="text" id="clone-description" placeholder="e.g. Voice-cloned Alex">
+            </label>
+            <button type="submit" class="btn ghost">Clone voice</button>
+            <div class="clone-status" id="clone-status"></div>
+          </form>
+        </details>
+      </div>
     </div>
   </aside>
 
@@ -204,19 +387,123 @@
     const orb = new VoiceOrb(document.getElementById('viz'), { preset: 'Default' });
     window.__orb = orb;
 
-    // --- Drawer toggle ----------------------------------------------------
+    // --- Drawer toggle ---------------------------------------------------
     const drawer = document.getElementById('drawer');
     const toggle = document.getElementById('menu-toggle');
-    const setDrawer = (open) => {
-      drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
-      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    };
     toggle.addEventListener('click', () => {
       const open = drawer.getAttribute('aria-hidden') === 'true';
-      setDrawer(open);
+      drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
     });
 
-    // --- WebRTC ----------------------------------------------------------
+    // --- Slider / color factories ---------------------------------------
+    const paramInputs = {};   // key → (value) => updates the UI display
+
+    function formatValue(v, step) {
+      const n = Number(v);
+      if (Number.isInteger(step)) return String(Math.round(n));
+      const decimals = step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0;
+      return n.toFixed(decimals);
+    }
+
+    function createSlider(container, { key, label, min, max, step }) {
+      const field = document.createElement('div');
+      field.className = 'field';
+      const lbl = document.createElement('label');
+      lbl.htmlFor = `ctrl-${key}`;
+      lbl.textContent = label;
+      const row = document.createElement('div');
+      row.className = 'slider-row';
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.id = `ctrl-${key}`;
+      input.min = min; input.max = max; input.step = step;
+      input.value = orb.basePreset[key];
+      const display = document.createElement('span');
+      display.className = 'slider-value';
+      display.textContent = formatValue(input.value, step);
+      input.addEventListener('input', () => {
+        const v = Number(input.value);
+        orb.setParam(key, v);
+        display.textContent = formatValue(v, step);
+      });
+      row.append(input, display);
+      field.append(lbl, row);
+      container.appendChild(field);
+      paramInputs[key] = v => {
+        input.value = v;
+        display.textContent = formatValue(v, step);
+      };
+    }
+
+    function createColor(container, { key, label }) {
+      const field = document.createElement('div');
+      field.className = 'field';
+      const lbl = document.createElement('label');
+      lbl.textContent = label;
+      const row = document.createElement('div');
+      row.className = 'color-row';
+      const swatch = document.createElement('input');
+      swatch.type = 'color';
+      swatch.value = orb.basePreset[key];
+      const hex = document.createElement('input');
+      hex.type = 'text';
+      hex.value = orb.basePreset[key];
+      const sync = (v) => {
+        if (!/^#[0-9a-fA-F]{6}$/.test(v)) return;
+        orb.setParam(key, v);
+        swatch.value = v;
+        hex.value = v.toLowerCase();
+      };
+      swatch.addEventListener('input', () => sync(swatch.value));
+      hex.addEventListener('change', () => sync(hex.value));
+      row.append(swatch, hex);
+      field.append(lbl, row);
+      container.appendChild(field);
+      paramInputs[key] = v => {
+        swatch.value = v;
+        hex.value = v.toLowerCase();
+      };
+    }
+
+    // --- Mount all controls (ranges straight from the CodePen) ---------
+    const colorSec = document.getElementById('section-color');
+    createColor(colorSec, { key: 'primaryEnergy',   label: 'Primary' });
+    createColor(colorSec, { key: 'secondaryEnergy', label: 'Secondary' });
+
+    const energySec = document.getElementById('section-energy');
+    createSlider(energySec, { key: 'density',              label: 'Density',        min: 0.1, max: 3.0,  step: 0.1   });
+    createSlider(energySec, { key: 'atmosphereGlow',       label: 'Glow',           min: 0.0, max: 5.0,  step: 0.01  });
+    createSlider(energySec, { key: 'atmosphereLevel',      label: 'Halo thickness', min: 0.1, max: 1.0,  step: 0.01  });
+    createSlider(energySec, { key: 'atmosphereScale',      label: 'Halo scale',     min: 1.0, max: 1.1,  step: 0.001 });
+    createSlider(energySec, { key: 'chromaticAberration',  label: 'Aberration',     min: 0.0, max: 0.05, step: 0.001 });
+
+    const motionSec = document.getElementById('section-motion');
+    createSlider(motionSec, { key: 'speed',         label: 'Internal speed', min: 0.1, max: 3.0, step: 0.1  });
+    createSlider(motionSec, { key: 'orbRotation',   label: 'Auto-rotation',  min: 0.0, max: 1.0, step: 0.01 });
+    createSlider(motionSec, { key: 'internalAnim',  label: 'Anim speed',     min: 0.0, max: 2.0, step: 0.01 });
+
+    const fractalSec = document.getElementById('section-fractal');
+    createSlider(fractalSec, { key: 'fractalIters',  label: 'Iterations', min: 2,    max: 12,  step: 1    });
+    createSlider(fractalSec, { key: 'fractalScale',  label: 'Scale',      min: 0.3,  max: 1.5, step: 0.01 });
+    createSlider(fractalSec, { key: 'fractalDecay',  label: 'Decay',      min: -25,  max: -5,  step: 0.1  });
+    createSlider(fractalSec, { key: 'smoothness',    label: 'Smoothness', min: 0.0,  max: 0.15,step: 0.001});
+    createSlider(fractalSec, { key: 'asymmetry',     label: 'Asymmetry',  min: 0.0,  max: 1.0, step: 0.01 });
+
+    const perfSec = document.getElementById('section-perf');
+    createSlider(perfSec, { key: 'dpr', label: 'Resolution', min: 0.1, max: 2.0, step: 0.1 });
+
+    // --- Preset dropdown syncs every slider/color to the new preset ----
+    const vizEl = document.getElementById('viz-preset');
+    vizEl.addEventListener('change', () => {
+      orb.setPreset(vizEl.value);
+      const p = orb.getParams();
+      for (const [k, apply] of Object.entries(paramInputs)) {
+        if (k in p) apply(p[k]);
+      }
+    });
+
+    // --- WebRTC ---------------------------------------------------------
     const btn = document.getElementById("btn");
     const audioEl = document.getElementById("audio");
     const statusEl = document.getElementById("status-float");
@@ -232,7 +519,7 @@
       statusEl.textContent = text;
       _transientTimer = setTimeout(() => {
         _transientTimer = null;
-        statusEl.textContent = "";   // :empty triggers CSS opacity fade
+        statusEl.textContent = "";
       }, seconds * 1000);
     };
 
@@ -347,8 +634,6 @@
     };
 
     btn.onclick = toggleSession;
-
-    // Double-click the orb to start/stop. The orb canvas lives in #viz.
     document.getElementById('viz').addEventListener('dblclick', (e) => {
       e.preventDefault();
       toggleSession();
@@ -368,11 +653,7 @@
       });
     });
 
-    // --- Visual preset ---------------------------------------------------
-    const vizEl = document.getElementById("viz-preset");
-    vizEl.addEventListener("change", () => orb.setPreset(vizEl.value));
-
-    // --- Skill dropdown --------------------------------------------------
+    // --- Skills ----------------------------------------------------------
     const skillEl = document.getElementById("skill");
     async function refreshSkills(selectSlug) {
       const j = await fetch("/api/skills").then(r => r.json()).catch(() => ({skills: []}));

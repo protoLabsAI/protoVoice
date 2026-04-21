@@ -617,6 +617,36 @@ export class VoiceOrb {
     this._beginStateCrossfade(this.state);
   }
 
+  /**
+   * Live-edit a single preset parameter. Sliders in the UI call this on
+   * every input event. State-driven values (density, glow, speed, CA,
+   * asymmetry, internalAnim, orbRotation, colors) re-run the state
+   * crossfade so the resting values pick up the new base. Direct-uniform
+   * values (fractal*, smoothness, atmosphereLevel, atmosphereScale, dpr)
+   * update their uniforms immediately.
+   */
+  setParam(key, value) {
+    if (!(key in this.basePreset)) return;
+    this.basePreset[key] = value;
+    switch (key) {
+      case 'fractalIters':   this.uniforms.uFractalIters.value = value; return;
+      case 'fractalScale':   this.uniforms.uFractalScale.value = value; return;
+      case 'fractalDecay':   this.uniforms.uFractalDecay.value = value; return;
+      case 'smoothness':     this.uniforms.uSmoothness.value   = value; return;
+      case 'atmosphereLevel':this.atmosphereUniforms.uLevel.value = value; return;
+      case 'atmosphereScale':this.atmosphereMesh.scale.setScalar(value); return;
+      case 'dpr':
+        this.renderer.setPixelRatio(value);
+        this.composer.setPixelRatio(value);
+        return;
+    }
+    // Everything else is state-driven — re-run the crossfade so the
+    // target snapshot reads the new base.
+    this._beginStateCrossfade(this.state);
+  }
+
+  getParams() { return { ...this.basePreset }; }
+
   attachStream(stream, kind) {
     if (!this._audioCtx) {
       this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
