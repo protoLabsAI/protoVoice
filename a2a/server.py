@@ -104,6 +104,7 @@ def _jsonrpc_error(rpc_id: Any, code: int, message: str, status: int = 400) -> J
 
 TextAgent = Callable[[str, str], Awaitable[str]]
 DeliveryProvider = Callable[[], DeliveryController | None]
+SkillSlugProvider = Callable[[], str]
 
 
 def register_a2a_routes(
@@ -111,6 +112,7 @@ def register_a2a_routes(
     *,
     text_agent: TextAgent,
     delivery_provider: DeliveryProvider | None = None,
+    skill_slug_provider: SkillSlugProvider | None = None,
 ) -> None:
     """Mount /a2a, /a2a/callback, and /.well-known/agent-card.json.
 
@@ -119,6 +121,10 @@ def register_a2a_routes(
     `delivery_provider` returns the currently-active session's
     DeliveryController or None. Sessions come and go, so we resolve at
     callback time instead of capturing a stale reference.
+
+    `skill_slug_provider` returns the current active skill slug so we
+    can stash orphan deliveries under the right key when there's no
+    live session. Falls back to 'default' if not supplied.
     """
 
     @app.get("/.well-known/agent.json", include_in_schema=False)
@@ -200,8 +206,18 @@ def register_a2a_routes(
             return {"ok": True, "delivered": False, "reason": "no text"}
         delivery = delivery_provider() if delivery_provider else None
         if delivery is None:
-            logger.info("[a2a/callback] no active voice session — result dropped")
-            return {"ok": True, "delivered": False, "reason": "no active session"}
+            # No live session — stash for the next connect instead of
+            # dropping. Replay via drain_stashed_deliveries on_client_connected.
+            from agent.session_store import stash_delivery
+            slug = skill_slug_provider() if skill_slug_provider else "default"
+            stash_delivery(slug, {
+                "phrase": f"{caller} says — {text}",
+                "policy": "next_silence",
+                "priority": "time_sensitive",
+                "keywords": [],
+            })
+            logger.info(f"[a2a/callback] no active session — stashed under {slug!r}")
+            return {"ok": True, "delivered": False, "stashed": True}
 
         # Attribution is handled by DeliveryController — no need to wrap
         # with "heads up" since "{caller} says —" does that natively.

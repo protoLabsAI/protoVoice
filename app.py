@@ -98,7 +98,12 @@ from agent.filler import (
     tool_response_block,
     tool_use_block,
 )
-from agent.session_store import load_last_summary, save_summary
+from agent.session_store import (
+    drain_stashed_deliveries,
+    load_last_summary,
+    save_summary,
+    stash_delivery,
+)
 from agent.tools import ASYNC_TOOL_NAMES, latency_for, register_tools
 from skills.loader import load_skills, write_voice_clone_skill
 from skills.models import DEFAULT_SOUL_SLUG, Skill
@@ -607,11 +612,23 @@ async def run_bot(webrtc_connection) -> None:
         _METRICS["sessions_total"] += 1
         _METRICS["sessions_active"] += 1
         logger.info("client connected")
+        # Replay any deliveries that arrived while we were disconnected
+        # (a2a pushes, slow_research completions, scheduled messages).
+        # The controller's bid-then-drain will ask before flushing if
+        # there are ≥2 queued items.
+        stashed = drain_stashed_deliveries(skill.slug)
+        if stashed:
+            logger.info(f"[replay] replaying {len(stashed)} stashed delivery(ies)")
+            await delivery.replay_stashed(stashed)
 
     @transport.event_handler("on_client_disconnected")
     async def _on_disconnect(_t, _c):
         global _ACTIVE_DELIVERY
         logger.info("client disconnected")
+        # Persist anything still pending so the next session can replay.
+        snapshot = delivery.snapshot_pending()
+        for item in snapshot:
+            stash_delivery(skill.slug, item)
         if _ACTIVE_DELIVERY is delivery:
             _ACTIVE_DELIVERY = None
         _METRICS["sessions_active"] = max(0, _METRICS["sessions_active"] - 1)
@@ -852,6 +869,7 @@ register_a2a_routes(
     app,
     text_agent=text_agent,
     delivery_provider=lambda: _ACTIVE_DELIVERY,
+    skill_slug_provider=lambda: _ACTIVE_SKILL_SLUG,
 )
 
 

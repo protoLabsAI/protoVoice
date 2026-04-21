@@ -139,6 +139,37 @@ class DeliveryController(FrameProcessor):
     def set_emitter(self, emitter: FrameEmitter) -> None:
         self._emitter = emitter
 
+    # --- Cross-session persistence helpers --------------------------------
+
+    def snapshot_pending(self) -> list[dict[str, object]]:
+        """Return a JSON-serializable list of currently-pending items.
+        Used by app.py on disconnect to stash what didn't land in time."""
+        return [
+            {
+                "phrase": p.phrase,
+                "policy": p.policy.value,
+                "priority": p.priority.value,
+                "keywords": list(p.keywords),
+                "enqueued_at": p.enqueued_at,
+            }
+            for p in self._pending
+        ]
+
+    async def replay_stashed(self, items: list[dict[str, object]]) -> None:
+        """Enqueue stashed items (from a prior session) via the normal
+        deliver() path. Phrases are already attributed; pass source=None
+        so we don't double-wrap."""
+        for raw in items:
+            try:
+                priority = Priority(raw.get("priority", Priority.ACTIVE.value))
+                policy = DeliveryPolicy(raw["policy"]) if "policy" in raw else None
+                phrase = raw["phrase"]
+                keywords = tuple(raw.get("keywords") or ())
+            except Exception as e:
+                logger.warning(f"[delivery] skipping malformed stashed item: {e}")
+                continue
+            await self.deliver(phrase, priority=priority, policy=policy, keywords=keywords)
+
     # Public API — tool handlers call this to schedule a push delivery.
     async def deliver(
         self,

@@ -101,6 +101,18 @@ Sort: priority rank DESC (critical first), then recency DESC (newest first). Kee
 
 Pattern borrowed from [ProMemAssist](https://arxiv.org/pdf/2507.21378) (UIST '25) which validated utility-gated discard over summarization for voice queues.
 
+## Cross-session replay (reconnect)
+
+If the user disconnects before a delivery lands — or an A2A push / `slow_research` result arrives while no voice session is live — the item is stashed to `{SESSION_STORE_DIR}/{skill_slug}.pending.json` (default `/tmp/protovoice_sessions/`).
+
+On the next session connect with the same skill:
+
+1. `drain_stashed_deliveries(skill_slug)` reads + deletes the file.
+2. Items are re-enqueued via `delivery.replay_stashed(...)`.
+3. If there are ≥ 2, the [bid-then-drain](#bid-then-drain-%E2%89%A5-2-items) path kicks in automatically — the agent asks "I've got updates from ava and slow_research — want to hear them?" before flushing.
+
+Pattern from LangGraph's [interrupt + checkpointer](https://docs.langchain.com/oss/python/langgraph/interrupts) model + the A2A spec's requirement that push configs persist until task completion.
+
 ## Known edge cases
 
 - **User mutes their own mic.** VAD never sees user-stopped, so `next_silence` never fires. Fallback timer (planned): deliver after 10 s regardless.
