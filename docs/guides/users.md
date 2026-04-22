@@ -27,17 +27,58 @@ users:
   - id: alice
     api_key: pv_ak_aXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
     display_name: Alice
+    role: user              # default — can be omitted
+    pinned_skill: josh      # Alice can only run this skill
+    pinned_viz:             # override the skill's default viz
+      palette: Noir
 
   - id: bob
     api_key: pv_ak_bYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY
     display_name: Bob
+    role: admin             # free to pick any skill, edit orb viz, edit other users
 ```
 
-- `id` — short, URL-safe identifier. Used in session-memory paths (`/tmp/protovoice_sessions/{id}/…`) and Langfuse attribution.
-- `api_key` — the secret the client sends. Generate with `python3 -c "import secrets; print('pv_ak_' + secrets.token_urlsafe(32))"`.
-- `display_name` — optional; defaults to the id title-cased.
+| Field | Required | Purpose |
+|:---|:---|:---|
+| `id` | yes | Short, URL-safe identifier. Used in session-memory paths (`/tmp/protovoice_sessions/{id}/…`) and Langfuse attribution. |
+| `api_key` | yes | Secret the client sends. Generate with `python3 -c "import secrets; print('pv_ak_' + secrets.token_urlsafe(32))"`. |
+| `display_name` | no | Human-readable name for UI. Defaults to `id` title-cased. |
+| `role` | no | `user` (default) or `admin`. Users are locked to their pinned values; admins are unconstrained. |
+| `pinned_skill` | no | Skill slug this user is locked to. `POST /api/skills` returns `403` for the owning user; the client hides the selector. Admins are never pinned. |
+| `pinned_viz` | no | Mapping with optional `variant` / `palette` / `params`. Overrides the skill's default viz block on session start. Applies to any user (admin or otherwise) whose roster entry carries it. |
 
 Copy `config/users.example.yaml` as a starting point.
+
+### Roles
+
+| Role | Can change own skill | Can edit orb viz | Can edit other users |
+|:---|:---|:---|:---|
+| `user` (default) | only if no `pinned_skill` | only if no `pinned_viz`/`pinned_skill` | no |
+| `admin` | yes, freely | yes, freely | yes (via `POST /api/admin/skills`) |
+
+The single-user fallback (empty roster) resolves every request to a synthetic `default` user with `role: admin` — local dev + tailnet-only deployments stay unconstrained.
+
+### Pinning
+
+Pinning is the mechanism that makes multi-tenant installs opinionated per-user:
+
+- `pinned_skill: josh` locks Alice to the Josh persona. Her client hides the skill dropdown and shows a read-only chip labelled "Pinned by admin". `GET /api/skills` returns `locked: true` and `active: "josh"` regardless of her mutable state.
+- `pinned_viz: { palette: Noir }` overrides whatever viz the active skill advertises. Merges on top of skill defaults in the priority `pinned_viz → skill.viz → nothing`.
+- Admins bypass both pins — even if you set `pinned_skill` on an admin entry, the server still accepts their `POST /api/skills` because `User.is_admin` short-circuits the pin check. (In practice: don't pin admins; the field is ignored for them.)
+- `config/users.yaml` is authoritative. There is no runtime API to mutate pins yet — edit the YAML (or the `USERS_YAML` Infisical secret) and call `POST /api/users/reload`. A full admin CRUD UI is future work.
+
+### Admin overrides
+
+Admins can set any user's mutable active skill without touching their pin:
+
+```bash
+curl -X POST https://protovoice/api/admin/skills \
+  -H "X-API-Key: <admin-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "bob", "slug": "chef"}'
+```
+
+This updates the target user's in-memory `UserState.skill_slug` (applies on their next connect). It does **not** modify `pinned_skill` — to change a pin you still edit the roster. Admin writes to `config/users.yaml` from the UI are planned; for now, administer the roster out-of-band.
 
 ## Infisical roster (recommended for the fleet)
 
@@ -62,7 +103,8 @@ When all three credential vars are set, Infisical becomes the active source; `co
 
 | Concern | Behavior |
 |:---|:---|
-| Skill selection (`/api/skills`) | Each user has their own active skill — Alice on `chef` doesn't affect Bob's dropdown. |
+| Skill selection (`/api/skills`) | Each user has their own active skill — Alice on `chef` doesn't affect Bob's dropdown. Pinned users can't change theirs (`403`). |
+| Orb viz | `pinned_viz` on the user entry overrides `skill.viz`. Non-admin users can't open the Orb settings tab in the drawer. |
 | Verbosity (`/api/verbosity`) | Per-user. Alice's `silent` is invisible to Bob's `chatty`. |
 | Session memory | Stored at `{SESSION_STORE_DIR}/{user_id}/{skill_slug}.txt` — no cross-user sharing by design. |
 | Stashed deliveries | Same path pattern. Replays only to the user who was offline when the push arrived. |

@@ -121,6 +121,25 @@ delegates: [ava, opus]   # this skill can only delegate_to these two
 
 Empty list / omitted = full registry exposed (current behavior). Unknown names are dropped silently so a typo doesn't leave the skill with zero delegates — just with the ones that resolved.
 
+### Dedicated orb viz
+
+A skill can ship its own orb visualization — variant, palette, or individual params — and the client auto-applies it when the user switches to that skill.
+
+```yaml
+viz:
+  variant: fractal       # orb variant name — see orb-visualizer reference
+  palette: Ember         # palette name within that variant
+  params:                # individual overrides on top of the palette
+    density: 2.4
+    speed: 0.45
+```
+
+- All three keys are optional; omit the block entirely if the skill should leave the orb alone.
+- Unknown `variant` or `palette` names are logged as a console warning on the client and skipped — the params still apply.
+- Inherited via `extends:` — child skills can shadow `viz.palette` while keeping the parent's `variant`.
+
+A per-user `pinned_viz` in the roster overrides this block (priority: `user.pinned_viz → skill.viz → nothing`). See [Users → Pinning](./users#pinning).
+
 ## The default persona — `SOUL.md`
 
 `config/SOUL.md` is the default skill. Plain markdown, no frontmatter. Edit freely — changes take effect on server restart. The default ships with a chief-of-staff-ish tone and directives about when to dispatch to other agents.
