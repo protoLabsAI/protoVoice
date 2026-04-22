@@ -1,7 +1,4 @@
 slug: voice-03
 name: Voice 03
 description: Saved Fish reference voice_03 — rename if you know whose voice this is.
-
-system_prompt_file: ../SOUL.md
-tts_backend: fish
 voice: voice_03

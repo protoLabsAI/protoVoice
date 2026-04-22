@@ -38,6 +38,22 @@ system_prompt_file: tutor.md
 
 The path is relative to the YAML file.
 
+### Inheritance (`extends:`)
+
+A skill can inherit from another — every field is merged from the parent, child keys win. When `extends:` is omitted, the parent defaults to `default` (the SOUL.md persona). Set `extends: null` to opt out.
+
+```yaml
+# config/skills/voice-01.yaml
+slug: voice-01
+name: Voice 01
+voice: voice_01
+# tts_backend + system_prompt inherited from the default skill
+```
+
+This is how the voice-clone YAMLs stay three lines each — they pick up the SOUL.md persona + Fish backend from the default without repeating them. Define a new voice by dropping in a YAML with just `slug`, `name`, and `voice`; everything else cascades.
+
+Chains work: `extends: josh` would inherit from `josh`, which itself inherits from `default`. Cycles are detected and warned.
+
 ### Tool restriction
 
 ```yaml
@@ -49,6 +65,61 @@ When set, the skill's session only sees the listed tools — the LLM literally c
 Useful for keeping personas in lane: a kitchen-savvy `chef` skill doesn't need `a2a_dispatch` or `slow_research`; a customer-support skill might want only `web_search` + a `lookup_order` tool you've added.
 
 Unknown tool names in the list are logged as warnings and ignored. If your list filters down to zero tools, protoVoice refuses to leave the agent toolless and falls back to exposing all (with a warning).
+
+### Per-skill behavior tuning
+
+Pipeline controllers (backchannel, micro-ack, barge-in) default to the values set via environment variables. A skill can override them with a `behavior:` block. Each key accepts `false` (disable), `true` (enable with defaults), or a dict with timing overrides.
+
+```yaml
+behavior:
+  backchannel: false              # silent skill — no listener-acks
+  micro_ack:
+    first_ms: 800                 # wait longer before injecting "mm"
+  bargein:
+    grace_ms: 500                 # longer grace — harder to interrupt
+```
+
+| Key | Shape | Effect |
+|---|---|---|
+| `backchannel` | `false` / `true` / `{enabled, first_ms, interval_ms}` | Mid-turn "mm-hmm" emission. Disable for "quiet" personas. |
+| `micro_ack` | `false` / `true` / `{enabled, first_ms}` | Short ack if pipeline hasn't spoken within `first_ms` of UserStopped. |
+| `bargein` | `false` / `true` / `{enabled, grace_ms}` | Adaptive barge-in gate during bot speech. `false` lets every VAD hit interrupt. |
+
+Behavior overrides are session-scoped and read at connection time. Settings from the parent skill (via `extends:`) are merged per-controller — a child that only overrides `backchannel` keeps the parent's `bargein` + `micro_ack`.
+
+### Routing to a different LLM per skill
+
+By default every skill hits the process-wide `LLM_URL` (typically the local vLLM). A skill can override with an `llm:` block:
+
+```yaml
+llm:
+  url: http://gateway:4000/v1     # LiteLLM / OpenRouter / direct provider
+  model: anthropic/claude-sonnet-4-6
+  api_key_env: LITELLM_KEY
+```
+
+| Key | Purpose |
+|---|---|
+| `url` | OpenAI-compatible base URL for this skill's chat completions |
+| `model` | Model name sent to that endpoint |
+| `api_key_env` | Env var to read the API key from |
+| `extra_body` | Optional — passed through as OpenAI `extra_body`. Omit to let the gateway run its own defaults. |
+
+When `llm.url` is set, protoVoice:
+- Drops the vLLM-specific `chat_template_kwargs` body (they get rejected by non-vLLM gateways) unless you explicitly pass `extra_body`.
+- Keeps the `developer` role intact (vLLM rejects it; OpenAI-shaped gateways generally accept it).
+
+`temperature` and `max_tokens` stay at the skill's top level — they apply to both the default and custom endpoints.
+
+### Restricting delegates per skill
+
+By default every delegate in `config/delegates.yaml` is exposed through the `delegate_to(target=…)` tool. A skill can filter:
+
+```yaml
+delegates: [ava, opus]   # this skill can only delegate_to these two
+```
+
+Empty list / omitted = full registry exposed (current behavior). Unknown names are dropped silently so a typo doesn't leave the skill with zero delegates — just with the ones that resolved.
 
 ## The default persona — `SOUL.md`
 
