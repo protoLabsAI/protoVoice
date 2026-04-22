@@ -62,6 +62,7 @@ export default defineConfig({
             { text: "WebRTC Protocol", link: "/reference/webrtc-protocol" },
             { text: "TTS Backends", link: "/reference/tts-backends" },
             { text: "Pipeline Shape", link: "/reference/pipeline-shape" },
+            { text: "Orb Visualizer", link: "/reference/orb-visualizer" },
             { text: "Tools", link: "/reference/tools" },
             { text: "Delegates", link: "/reference/delegates" },
             { text: "Memory", link: "/reference/memory" },
