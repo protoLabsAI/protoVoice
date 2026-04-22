@@ -45,6 +45,10 @@ class AuthError(HTTPException):
         super().__init__(status_code=401, detail=detail)
 
 
+ROLE_USER = "user"
+ROLE_ADMIN = "admin"
+
+
 @dataclass(frozen=True)
 class User:
     """A known protoVoice user."""
@@ -52,15 +56,30 @@ class User:
     display_name: str
     # Stored as a hash in memory; compared constant-time against incoming keys.
     api_key_hash: str
+    # Permission role. "admin" can freely pick skill / viz + edit other
+    # users. "user" (default) is locked to their pinned_skill / pinned_viz.
+    role: str = ROLE_USER
+    # Pinned persona / orb. When set, POST /api/skills returns 403 for
+    # this user and the client hides the selectors. Admins are never
+    # pinned — they can always change their own state.
+    pinned_skill: str | None = None
+    pinned_viz: dict | None = None
 
     @staticmethod
     def hash_key(api_key: str) -> str:
         return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
+    @property
+    def is_admin(self) -> bool:
+        return self.role == ROLE_ADMIN
+
 
 # Sentinel used when no config/users.yaml is present — the single-user
-# fallback every request resolves to.
-DEFAULT_USER = User(id="default", display_name="Default", api_key_hash="")
+# fallback every request resolves to. Runs as admin so dev doesn't get
+# locked out.
+DEFAULT_USER = User(
+    id="default", display_name="Default", api_key_hash="", role=ROLE_ADMIN,
+)
 
 
 class UserRegistry:
@@ -120,8 +139,22 @@ class UserRegistry:
                     logger.warning(f"[auth] skipping malformed user entry: {raw!r}")
                     continue
                 name = (raw.get("display_name") or uid).strip()
+                role = (raw.get("role") or ROLE_USER).strip().lower()
+                if role not in (ROLE_USER, ROLE_ADMIN):
+                    logger.warning(f"[auth] {uid}: unknown role {role!r}, defaulting to 'user'")
+                    role = ROLE_USER
+                pinned_skill = raw.get("pinned_skill") or None
+                pinned_viz = raw.get("pinned_viz") or None
+                if pinned_viz is not None and not isinstance(pinned_viz, dict):
+                    logger.warning(f"[auth] {uid}: pinned_viz must be a mapping, ignoring")
+                    pinned_viz = None
                 new_index[User.hash_key(key)] = User(
-                    id=uid, display_name=name, api_key_hash=User.hash_key(key),
+                    id=uid,
+                    display_name=name,
+                    api_key_hash=User.hash_key(key),
+                    role=role,
+                    pinned_skill=pinned_skill,
+                    pinned_viz=pinned_viz,
                 )
 
         self._by_hash = new_index
@@ -155,6 +188,17 @@ class UserRegistry:
 
     def all(self) -> list[User]:
         return list(self._by_hash.values())
+
+    def by_id(self, user_id: str) -> User | None:
+        """Look up a user by id rather than api key. Used by code that
+        already has a user_id (e.g. from a ContextVar) and needs role +
+        pinned_skill / pinned_viz info."""
+        if user_id == DEFAULT_USER.id and self.single_user_mode():
+            return DEFAULT_USER
+        for u in self._by_hash.values():
+            if u.id == user_id:
+                return u
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +243,19 @@ def require_user(
     user = user_registry.resolve(key)
     if not user:
         raise AuthError("unknown or missing api key")
+    return user
+
+
+def require_admin(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    authorization: str | None = Header(default=None),
+) -> User:
+    """Like require_user, but 403 unless the resolved user's role is 'admin'.
+    Single-user fallback mode resolves to DEFAULT_USER (role=admin), so dev
+    + existing tailnet deployments keep working."""
+    user = require_user(x_api_key=x_api_key, authorization=authorization)
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="admin role required")
     return user
 
 

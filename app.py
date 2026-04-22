@@ -47,7 +47,7 @@ except ImportError:
 os.environ.setdefault("HF_HOME", os.environ.get("MODEL_DIR", "/models"))
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -118,7 +118,7 @@ from agent.tools import (
 )
 from skills.loader import load_skills, write_voice_clone_skill
 from skills.models import DEFAULT_SOUL_SLUG, Skill
-from auth import load_users, require_user, user_registry
+from auth import load_users, require_admin, require_user, user_registry
 from auth.users import DEFAULT_USER, User
 from auth.context import current_session_id, current_user_id
 from agent.user_state import active_user_states, user_state_for, UserState
@@ -237,8 +237,21 @@ _METRICS: dict = {
 }
 
 
+def _resolved_skill_slug(user: User | None, user_id: str | None = None) -> str:
+    """Resolve which skill slug this user's next session will use.
+
+    Pinned users get their pinned_skill regardless of what ``/api/skills``
+    thinks the mutable active slug is. Admins + unpinned users fall
+    back to the mutable user_state.skill_slug.
+    """
+    uid = user.id if user else (user_id or "default")
+    if user and user.pinned_skill:
+        return user.pinned_skill
+    return user_state_for(uid).skill_slug or DEFAULT_SOUL_SLUG
+
+
 def _active_skill(user_id: str) -> Skill:
-    slug = user_state_for(user_id).skill_slug or DEFAULT_SOUL_SLUG
+    slug = _resolved_skill_slug(user_registry.by_id(user_id), user_id=user_id)
     return _SKILLS.get(slug) or _SKILLS[DEFAULT_SOUL_SLUG]
 
 
@@ -996,11 +1009,17 @@ async def metrics(user: User = Depends(require_user)):
 
 @app.get("/api/whoami")
 async def whoami(user: User = Depends(require_user)):
-    """Returns the caller's resolved user id + display name. Clients use
-    this to confirm their API key is valid + show the user their name."""
+    """Returns the caller's resolved user id + display name + role +
+    pinned persona/viz. Clients use this to confirm their API key is
+    valid, show the user their name, and adapt the drawer UI based on
+    role (admins see the skill selector + orb-settings; pinned regular
+    users don't)."""
     return {
         "id": user.id,
         "display_name": user.display_name,
+        "role": user.role,
+        "pinned_skill": user.pinned_skill,
+        "pinned_viz": user.pinned_viz,
         "auth_source": user_registry.source,
     }
 
@@ -1023,11 +1042,21 @@ async def set_verbosity(body: dict, user: User = Depends(require_user)):
 
 @app.get("/api/skills")
 async def get_skills(user: User = Depends(require_user)):
-    state = user_state_for(user.id)
+    # Pinned users always see their pinned_skill as active, regardless of
+    # any mutable state. Lets the client reliably render "Skill: <pinned>"
+    # without special-casing.
+    active = _resolved_skill_slug(user)
     return {
-        "active": state.skill_slug or DEFAULT_SOUL_SLUG,
+        "active": active,
+        "locked": bool(user.pinned_skill),
         "skills": [
-            {"slug": s.slug, "name": s.name, "description": s.description}
+            {
+                "slug": s.slug,
+                "name": s.name,
+                "description": s.description,
+                # Optional dedicated orb viz. Clients apply it on skill switch.
+                "viz": dict(s.viz) if s.viz else {},
+            }
             for s in _SKILLS.values()
         ],
     }
@@ -1035,11 +1064,39 @@ async def get_skills(user: User = Depends(require_user)):
 
 @app.post("/api/skills")
 async def set_skill(body: dict, user: User = Depends(require_user)):
+    # Pinned (non-admin) users can't change their skill. Admins are never
+    # pinned, so this only trips up regular users.
+    if user.pinned_skill:
+        raise HTTPException(
+            status_code=403,
+            detail=f"skill is pinned to '{user.pinned_skill}' by admin",
+        )
     slug = (body.get("slug") or "").strip()
     if slug not in _SKILLS:
         return {"error": f"unknown skill: {slug}", "available": list(_SKILLS.keys())}
     user_state_for(user.id).skill_slug = slug
     return {"active": slug}
+
+
+@app.post("/api/admin/skills")
+async def admin_set_skill(body: dict, admin: User = Depends(require_admin)):
+    """Admin-only — set any user's active skill, bypassing pin.
+
+    Body: { user_id: <str>, slug: <str> }. Uses the user's mutable
+    skill_slug field; does not modify pinned_skill (to do that, edit
+    the user roster). Applies on the user's next connection — active
+    sessions keep the skill they snapshotted at connect.
+    """
+    target_id = (body.get("user_id") or "").strip()
+    slug = (body.get("slug") or "").strip()
+    if not target_id:
+        return {"error": "user_id is required"}
+    if slug not in _SKILLS:
+        return {"error": f"unknown skill: {slug}", "available": list(_SKILLS.keys())}
+    if not user_registry.single_user_mode() and user_registry.by_id(target_id) is None:
+        return {"error": f"unknown user: {target_id}"}
+    user_state_for(target_id).skill_slug = slug
+    return {"ok": True, "user_id": target_id, "active": slug}
 
 
 @app.post("/api/skills/reload")

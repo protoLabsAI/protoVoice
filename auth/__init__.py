@@ -2,9 +2,12 @@
 
 from .users import (
     AuthError,
+    ROLE_ADMIN,
+    ROLE_USER,
     User,
     UserRegistry,
     load_users,
+    require_admin,
     require_user,
     single_user_fallback,
     user_registry,
@@ -12,9 +15,12 @@ from .users import (
 
 __all__ = [
     "AuthError",
+    "ROLE_ADMIN",
+    "ROLE_USER",
     "User",
     "UserRegistry",
     "load_users",
+    "require_admin",
     "require_user",
     "single_user_fallback",
     "user_registry",
