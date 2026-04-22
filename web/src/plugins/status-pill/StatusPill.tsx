@@ -1,16 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { RTVIEvent } from '@pipecat-ai/client-js';
 import { useRTVIClientEvent, usePipecatClientTransportState } from '@pipecat-ai/client-react';
-import { useCoarsePointer } from '@/lib/useCoarsePointer';
 
-const IDLE_HINT_MOUSE = 'double-click the orb to start';
-const IDLE_HINT_TOUCH = 'tap the orb to start';
+const IDLE_HINT = 'double-click the orb to start';
 const CONNECTED_HINT = 'connected — speak';
 const FADE_MS = 3000;
 
 export function StatusPill() {
   const transport = usePipecatClientTransportState();
-  const coarsePointer = useCoarsePointer();
   const [transient, setTransient] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
 
@@ -33,8 +30,7 @@ export function StatusPill() {
   }, []);
 
   const disconnected = transport === 'disconnected' || transport === 'initialized' || transport === 'error';
-  const idleHint = coarsePointer ? IDLE_HINT_TOUCH : IDLE_HINT_MOUSE;
-  const text = transient ?? (disconnected ? idleHint : null);
+  const text = transient ?? (disconnected ? IDLE_HINT : null);
 
   if (!text) return null;
 

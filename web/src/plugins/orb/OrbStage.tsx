@@ -7,7 +7,6 @@ import {
   usePipecatClientTransportState,
 } from '@pipecat-ai/client-react';
 import { useActiveVariant } from './useOrbState';
-import { useCoarsePointer } from '@/lib/useCoarsePointer';
 import { useVoiceStateSelector } from '@/voice/hooks';
 import { LumaChromaticAberrationEffect } from './shared/chromaticAberration';
 import { useOrbState } from './useOrbState';
@@ -27,7 +26,6 @@ export function OrbStage() {
   const localTrack = usePipecatClientMediaTrack('audio', 'local');
   const client = usePipecatClient();
   const transport = usePipecatClientTransportState();
-  const coarse = useCoarsePointer();
 
   const botStream = useMemo(
     () => (botTrack ? new MediaStream([botTrack]) : null),
@@ -38,18 +36,26 @@ export function OrbStage() {
     [localTrack],
   );
 
-  const tryConnect = () => {
+  // Double-click / double-tap toggles the voice session on both mouse
+  // and touch. Single-tap stays free for drag-spin / click-pulse so
+  // users can play with the orb without accidentally (dis)connecting.
+  const onDoubleClick = () => {
     if (!client) return;
     const disconnected =
       transport === 'disconnected' ||
       transport === 'initialized' ||
       transport === 'error';
+    const active =
+      transport === 'ready' ||
+      transport === 'connected' ||
+      transport === 'connecting' ||
+      transport === 'authenticating';
     if (disconnected) {
       client.connect().catch((err) => console.error('[orb] connect error:', err));
+    } else if (active) {
+      client.disconnect().catch((err) => console.error('[orb] disconnect error:', err));
     }
   };
-  const onClick = () => { if (coarse) tryConnect(); };
-  const onDoubleClick = () => { if (!coarse) tryConnect(); };
 
   if (!variant) {
     return (
@@ -63,7 +69,6 @@ export function OrbStage() {
 
   return (
     <div
-      onClick={onClick}
       onDoubleClick={onDoubleClick}
       className="absolute inset-0"
       style={{ touchAction: 'none' }}
