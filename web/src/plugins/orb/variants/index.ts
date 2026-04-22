@@ -4,3 +4,6 @@
  * variants into the registry.
  */
 import './fractal';
+import './nebula';
+import './crystal';
+import './particles';
