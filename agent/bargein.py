@@ -50,9 +50,10 @@ class BargeInGate(FrameProcessor):
     """Buffer UserStartedSpeakingFrame during bot speech; release or
     suppress based on what follows within a short grace window."""
 
-    def __init__(self, *, grace_ms: int = 350) -> None:
+    def __init__(self, *, grace_ms: int = 350, enabled: bool = True) -> None:
         super().__init__()
         self._grace_s = grace_ms / 1000.0
+        self._enabled = enabled
         self._bot_speaking = False
         self._pending: UserStartedSpeakingFrame | None = None
         self._pending_dir: FrameDirection | None = None
@@ -70,9 +71,10 @@ class BargeInGate(FrameProcessor):
             # start so downstream sees a normal user-turn beginning.
             await self._flush()
 
-        # Gate only when the bot is actually speaking.
+        # Gate only when enabled and the bot is actually speaking.
         if (
-            isinstance(frame, UserStartedSpeakingFrame)
+            self._enabled
+            and isinstance(frame, UserStartedSpeakingFrame)
             and self._bot_speaking
             and self._pending is None
         ):

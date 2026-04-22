@@ -189,6 +189,22 @@ class DelegateRegistry:
     def all(self) -> list[Delegate]:
         return list(self._items.values())
 
+    def filtered(self, allow: list[str] | None) -> "DelegateRegistry":
+        """Return a shallow-copy registry limited to the given names.
+
+        `None` or empty list returns the full registry (current behavior).
+        Unknown names are dropped silently — skills with typos don't lose
+        access to all delegates, just the mistyped ones.
+        """
+        if not allow:
+            return self
+        out = DelegateRegistry(None)
+        for name in allow:
+            d = self._items.get(name)
+            if d:
+                out._items[name] = d
+        return out
+
     def __bool__(self) -> bool:
         return bool(self._items)
 

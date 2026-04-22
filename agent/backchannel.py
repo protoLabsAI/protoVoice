@@ -74,10 +74,20 @@ class BackchannelController(FrameProcessor):
         *,
         generator: FillerGenerator,
         tts_backend: str,
+        enabled: bool = True,
+        first_after_secs: float | None = None,
+        interval_secs: float | None = None,
     ):
         super().__init__()
         self._gen = generator
         self._backend = tts_backend
+        self._enabled = enabled
+        self._first_after_secs = (
+            first_after_secs if first_after_secs is not None else FIRST_AFTER_SECS
+        )
+        self._interval_secs = (
+            interval_secs if interval_secs is not None else INTERVAL_SECS
+        )
         self._loop_task: asyncio.Task | None = None
         self._emitter: FrameEmitter | None = None
         self._bot_speaking = False
@@ -128,6 +138,8 @@ class BackchannelController(FrameProcessor):
         return self._bot_thinking or self._bot_speaking or not self._user_speaking
 
     def _start_loop(self) -> None:
+        if not self._enabled:
+            return
         if self._gen.settings.verbosity is Verbosity.SILENT:
             return
         # Don't start while the agent is already talking — a spurious
@@ -145,10 +157,10 @@ class BackchannelController(FrameProcessor):
 
     async def _loop(self) -> None:
         try:
-            await asyncio.sleep(FIRST_AFTER_SECS)
+            await asyncio.sleep(self._first_after_secs)
             await self._emit_one()
             while True:
-                await asyncio.sleep(INTERVAL_SECS)
+                await asyncio.sleep(self._interval_secs)
                 await self._emit_one()
         except asyncio.CancelledError:
             pass

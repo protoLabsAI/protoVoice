@@ -239,6 +239,26 @@ def _active_skill() -> Skill:
     return _SKILLS.get(_ACTIVE_SKILL_SLUG) or _SKILLS[DEFAULT_SOUL_SLUG]
 
 
+def _resolve_behavior_block(raw) -> dict:
+    """Normalize a skill.behavior sub-block into {enabled: bool, ...overrides}.
+
+    Accepts:
+      - None / missing    → enabled with defaults
+      - False             → disabled
+      - True              → enabled with defaults
+      - dict              → enabled (unless dict has 'enabled: false'), overrides passed through
+    """
+    if raw is False:
+        return {"enabled": False}
+    if raw is True or raw is None:
+        return {"enabled": True}
+    if isinstance(raw, dict):
+        out = dict(raw)
+        out.setdefault("enabled", True)
+        return out
+    return {"enabled": True}
+
+
 def _effective_prompt(skill: Skill, tts_backend: str) -> str:
     """Compose the system prompt = persona + TOOL USE block.
 
@@ -323,13 +343,16 @@ async def text_agent(message: str, session_id: str) -> str:
     history = _A2A_CONTEXTS.setdefault(session_id, [])
     history.append({"role": "user", "content": message})
 
+    # Respect per-skill delegate filter for inbound A2A too.
+    session_delegates = _DELEGATES.filtered(skill.delegates if skill else None)
+
     # System prompt shared with the voice path — blocks for TOOL USE,
     # response shape, plan, repair all apply equally to a text reply.
     messages: list[dict] = [
         {"role": "system", "content": _effective_prompt(skill, TTS_BACKEND)},
         *history[-(_A2A_MAX_TURNS * 2):],
     ]
-    tools_openai = build_text_tool_schemas(_DELEGATES)
+    tools_openai = build_text_tool_schemas(session_delegates)
     client = _get_text_client()
 
     reply = ""
@@ -378,7 +401,7 @@ async def text_agent(message: str, session_id: str) -> str:
             result = await run_text_tool(
                 tc.function.name,
                 args,
-                delegates=_DELEGATES,
+                delegates=session_delegates,
             )
             messages.append({
                 "role": "tool",
@@ -436,29 +459,53 @@ async def run_bot(webrtc_connection) -> None:
     )
 
     stt = make_stt()
-    llm = OpenAILLMService(
-        api_key=LLM_API_KEY,
-        base_url=LLM_URL,
-        settings=OpenAILLMService.Settings(
-            model=LLM_SERVED_NAME,
-            temperature=skill.temperature if skill else LLM_TEMPERATURE,
-            max_tokens=skill.max_tokens if skill else LLM_MAX_TOKENS,
-            # Qwen3.5/3.6 stream `reasoning` + empty `content` by default.
-            # extra_body is forwarded as OpenAI "extra_body" — vLLM accepts
-            # `chat_template_kwargs` to toggle the thinking template off, so
-            # the model produces spoken-style content directly.
-            extra={
-                "extra_body": {
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            },
-        ),
+
+    # Per-skill LLM routing. When skill.llm.{url,model,api_key_env} is set,
+    # this session's chat completions go to that endpoint instead of the
+    # env default (typically the local vLLM). Lets a single skill route to
+    # a LiteLLM gateway, OpenAI, Anthropic, etc. — without affecting other
+    # skills running in the same process.
+    skill_llm = skill.llm or {}
+    using_custom_llm = bool(skill_llm.get("url"))
+    llm_url = str(skill_llm.get("url") or LLM_URL)
+    llm_model = str(skill_llm.get("model") or LLM_SERVED_NAME)
+    llm_api_key = (
+        os.environ.get(str(skill_llm["api_key_env"]), LLM_API_KEY)
+        if skill_llm.get("api_key_env")
+        else LLM_API_KEY
     )
-    # vLLM (and most non-OpenAI endpoints) reject `role: developer`. Pipecat
-    # uses that role to inject async-tool results back into the context;
-    # without this flip we 400 on every turn after a slow_research returns.
-    # The adapter converts developer → user when this is False.
-    llm.supports_developer_role = False
+    # vLLM-specific extras. Only inject when hitting the default (local)
+    # endpoint; non-vLLM gateways (LiteLLM, OpenAI, Anthropic) either
+    # ignore or reject `chat_template_kwargs`. Skills can override via
+    # skill.llm.extra_body.
+    if "extra_body" in skill_llm:
+        extra_body = skill_llm["extra_body"] or None
+    elif using_custom_llm:
+        extra_body = None
+    else:
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+
+    settings_kwargs: dict = {
+        "model": llm_model,
+        "temperature": skill.temperature if skill else LLM_TEMPERATURE,
+        "max_tokens": skill.max_tokens if skill else LLM_MAX_TOKENS,
+    }
+    if extra_body is not None:
+        settings_kwargs["extra"] = {"extra_body": extra_body}
+
+    llm = OpenAILLMService(
+        api_key=llm_api_key,
+        base_url=llm_url,
+        settings=OpenAILLMService.Settings(**settings_kwargs),
+    )
+    # vLLM rejects `role: developer` (used for async-tool result injection);
+    # OpenAI-compatible gateways generally accept it. Only strip when we
+    # know we're hitting the default local endpoint.
+    if not using_custom_llm:
+        llm.supports_developer_role = False
+
+    # Per-skill delegate filter. Empty list / None = all delegates exposed.
+    session_delegates = _DELEGATES.filtered(skill.delegates if skill else None)
     tts_kwargs: dict = {"backend": tts_backend}
     if skill.voice:
         if tts_backend == "kokoro":
@@ -472,9 +519,27 @@ async def run_bot(webrtc_connection) -> None:
     # Delivery controller — observes VAD + transcripts, drains push deliveries.
     delivery = DeliveryController()
 
+    # Per-skill behavior overrides. Each key can be:
+    #   false                — disable the controller for this skill
+    #   true (or omitted)    — enabled with env/module defaults
+    #   dict                 — enabled, with specific timing overrides
+    behavior = skill.behavior or {}
+    bc_cfg = _resolve_behavior_block(behavior.get("backchannel"))
+    ma_cfg = _resolve_behavior_block(behavior.get("micro_ack"))
+    bg_cfg = _resolve_behavior_block(behavior.get("bargein"))
+
     # Backchannel controller — emits brief listener-acks ("mm-hmm") during
     # long user utterances. Reuses the shared FillerGenerator.
-    backchannel = BackchannelController(generator=_FILLER_GEN, tts_backend=tts_backend)
+    bc_kwargs: dict = {
+        "generator": _FILLER_GEN,
+        "tts_backend": tts_backend,
+        "enabled": bc_cfg["enabled"],
+    }
+    if "first_ms" in bc_cfg:
+        bc_kwargs["first_after_secs"] = bc_cfg["first_ms"] / 1000.0
+    if "interval_ms" in bc_cfg:
+        bc_kwargs["interval_secs"] = bc_cfg["interval_ms"] / 1000.0
+    backchannel = BackchannelController(**bc_kwargs)
 
     # `_cancel_progress` is defined below; register_tools captures it via
     # closure so each SYNC tool handler auto-stops the progress loop on return.
@@ -493,7 +558,7 @@ async def run_bot(webrtc_connection) -> None:
         llm,
         on_finish=_cancel_progress,
         delivery=delivery,
-        delegates=_DELEGATES,
+        delegates=session_delegates,
         push_notification_url=_push_url,
         push_notification_token=_push_token,
     )
@@ -595,12 +660,19 @@ async def run_bot(webrtc_connection) -> None:
         # Adaptive barge-in gate — suppresses VAD-triggered interrupts
         # that resolve within the grace window as coughs / backchannels /
         # background noise. Real interrupts still fire, just confirmed.
-        BargeInGate(),
+        BargeInGate(
+            enabled=bg_cfg["enabled"],
+            **({"grace_ms": int(bg_cfg["grace_ms"])} if "grace_ms" in bg_cfg else {}),
+        ),
         # Micro-ack injector — if the main pipeline hasn't produced audio
         # within ~500 ms of UserStoppedSpeaking, emit a quiet "mm" / "hm"
         # so the agent feels responsive on slow turns. Cancels when the
         # bot actually starts speaking. Vapi Fill Injection pattern.
-        MicroAckInjector(tts_backend=tts_backend),
+        MicroAckInjector(
+            tts_backend=tts_backend,
+            enabled=ma_cfg["enabled"],
+            **({"trigger_ms": int(ma_cfg["first_ms"])} if "first_ms" in ma_cfg else {}),
+        ),
         # Both placed after the gate — they need TranscriptionFrames and
         # VAD frames produced by the aggregator. Push downstream into TTS.
         backchannel,

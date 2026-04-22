@@ -55,11 +55,19 @@ class MicroAckInjector(FrameProcessor):
     `trigger_ms` of UserStoppedSpeakingFrame. Cancels if the bot starts
     speaking within the window."""
 
-    def __init__(self, *, tts_backend: str, trigger_ms: int = 500, min_interval_secs: float = 4.0) -> None:
+    def __init__(
+        self,
+        *,
+        tts_backend: str,
+        trigger_ms: int = 500,
+        min_interval_secs: float = 4.0,
+        enabled: bool = True,
+    ) -> None:
         super().__init__()
         self._phrases: Sequence[str] = _FISH_ACKS if tts_backend == "fish" else _PLAIN_ACKS
         self._trigger_s = trigger_ms / 1000.0
         self._min_interval = min_interval_secs
+        self._enabled = enabled
         self._bot_speaking = False
         self._last_ack_at = 0.0
         self._timer: asyncio.Task | None = None
@@ -81,6 +89,8 @@ class MicroAckInjector(FrameProcessor):
         await self.push_frame(frame, direction)
 
     def _arm_timer(self) -> None:
+        if not self._enabled:
+            return
         now = time.monotonic()
         if self._bot_speaking:
             return
