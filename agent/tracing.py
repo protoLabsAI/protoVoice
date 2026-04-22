@@ -373,25 +373,34 @@ def flush() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Active-tracer registry — lets arbitrary modules reach the live trace
-# without importing app.py (circular-import-safe).
+# Active-tracer registry — per-user dict, so concurrent sessions don't
+# clobber each other's trace attribution. Callers deep in the stack that
+# don't have a user_id in scope read current_user_id from the ContextVar.
 # ---------------------------------------------------------------------------
 
-_ACTIVE: Any = None
+from auth.context import current_user_id
+
+_ACTIVE_BY_USER: dict[str, Any] = {}
 
 
-def set_active_tracer(tracer: Any) -> None:
-    global _ACTIVE
-    _ACTIVE = tracer
+def set_active_tracer(tracer: Any, *, user_id: str | None = None) -> None:
+    """Record (or clear) the live tracer for a user. Passing tracer=None
+    clears the entry."""
+    uid = user_id or current_user_id.get()
+    if tracer is None:
+        _ACTIVE_BY_USER.pop(uid, None)
+    else:
+        _ACTIVE_BY_USER[uid] = tracer
 
 
-def active_tracer() -> Any:
-    return _ACTIVE
+def active_tracer(user_id: str | None = None) -> Any:
+    uid = user_id or current_user_id.get()
+    return _ACTIVE_BY_USER.get(uid)
 
 
-def active_trace() -> Any:
+def active_trace(user_id: str | None = None) -> Any:
     """Shorthand for the current live turn trace (or _NULL if none)."""
-    t = _ACTIVE
+    t = active_tracer(user_id=user_id)
     if t is None or not hasattr(t, "get_current_trace"):
         return _NULL
     return t.get_current_trace()
@@ -407,11 +416,22 @@ def span(name: str, **span_kwargs: Any):
             result = transcribe(audio)
             sp.update(output=_preview(result))
 
+    Every span gets `user_id` + `session_id` stamped into its metadata,
+    read from the ContextVars set by the voice-session / A2A entry
+    points. Lets you filter Langfuse by user or session without having
+    to thread ids through every call site.
+
     Yields a _NullSpan when tracing is off or no trace is live; all
     `.update()` / `.end()` calls no-op. Callers never need an
     `if enabled()` guard.
     """
-    sp = active_trace().span(name=name, **span_kwargs)
+    from auth.context import current_session_id
+    metadata = dict(span_kwargs.pop("metadata", {}) or {})
+    metadata.setdefault("user_id", current_user_id.get())
+    sid = current_session_id.get()
+    if sid:
+        metadata.setdefault("session_id", sid)
+    sp = active_trace().span(name=name, metadata=metadata, **span_kwargs)
     try:
         yield sp
     finally:

@@ -120,6 +120,8 @@ from skills.loader import load_skills, write_voice_clone_skill
 from skills.models import DEFAULT_SOUL_SLUG, Skill
 from auth import load_users, require_user, user_registry
 from auth.users import DEFAULT_USER, User
+from auth.context import current_session_id, current_user_id
+from agent.user_state import active_user_states, user_state_for, UserState
 from voice import lifecycle
 from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt, transcribe_bytes
 from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
@@ -145,34 +147,27 @@ load_users(CONFIG_DIR / "users.yaml")
 # Skills registry + the currently selected skill. A `SYSTEM_PROMPT` env
 # override wins over the skill's prompt (kept for backwards compat).
 _SKILLS: dict[str, Skill] = load_skills(CONFIG_DIR)
-_ACTIVE_SKILL_SLUG: str = DEFAULT_SOUL_SLUG
 _SYSTEM_PROMPT_ENV_OVERRIDE = os.environ.get("SYSTEM_PROMPT") or None
 
-# Session-level filler settings. Module singleton for M5; per-session
-# keying lands with multi-tenant in a later milestone.
-_FILLER = FillerSettings()
-
-# Generative filler — one module-level instance sharing the same local
-# LLM endpoint that the voice pipeline uses. Cheap to keep warm.
-_FILLER_GEN = FillerGenerator(
-    llm_url=LLM_URL,
-    model=LLM_SERVED_NAME,
-    api_key=LLM_API_KEY,
-    settings=_FILLER,
-)
-
 # Delegate registry — A2A agents + OpenAI-compat endpoints the agent can
-# hand off to via `delegate_to`. Loaded once at boot.
+# hand off to via `delegate_to`. Loaded once at boot. Shared across users.
 _DELEGATES_YAML = Path(os.environ.get("DELEGATES_YAML", "config/delegates.yaml"))
 _DELEGATES = DelegateRegistry(_DELEGATES_YAML)
 
-# Tracks the most-recently-connected session's DeliveryController so the
-# A2A callback route can speak push-notified results when a session is
-# active. None when no one's connected.
-_ACTIVE_DELIVERY: DeliveryController | None = None
-# Active per-session Langfuse TurnTracer; exposed for non-pipeline code
-# (tools, delegate dispatch, etc.) to attach spans to the live trace.
-_ACTIVE_TRACER: object | None = None
+
+def _filler_gen_for(user_id: str) -> FillerGenerator:
+    """Lazy per-user FillerGenerator. Each user owns their own LLM client
+    + recency history; the settings are the per-user FillerSettings
+    stored on UserState."""
+    state = user_state_for(user_id)
+    if state.filler_generator is None:
+        state.filler_generator = FillerGenerator(
+            llm_url=LLM_URL,
+            model=LLM_SERVED_NAME,
+            api_key=LLM_API_KEY,
+            settings=state.filler_settings,
+        )
+    return state.filler_generator
 
 
 # ---------------------------------------------------------------------------
@@ -242,8 +237,9 @@ _METRICS: dict = {
 }
 
 
-def _active_skill() -> Skill:
-    return _SKILLS.get(_ACTIVE_SKILL_SLUG) or _SKILLS[DEFAULT_SOUL_SLUG]
+def _active_skill(user_id: str) -> Skill:
+    slug = user_state_for(user_id).skill_slug or DEFAULT_SOUL_SLUG
+    return _SKILLS.get(slug) or _SKILLS[DEFAULT_SOUL_SLUG]
 
 
 def _resolve_behavior_block(raw) -> dict:
@@ -266,26 +262,29 @@ def _resolve_behavior_block(raw) -> dict:
     return {"enabled": True}
 
 
-def _effective_prompt(skill: Skill, tts_backend: str) -> str:
+def _effective_prompt(
+    skill: Skill, tts_backend: str, *, verbosity, user_id: str,
+) -> str:
     """Compose the system prompt = persona + TOOL USE block.
 
     The TOOL USE block is verbosity-and-backend-aware — it instructs the
     LLM to emit a brief preamble before each tool call (the new "filler"
-    primitive), with prosody guidance per backend.
+    primitive), with prosody guidance per backend. Verbosity is per-user
+    and passed in by the caller.
     """
     base = _SYSTEM_PROMPT_ENV_OVERRIDE or skill.system_prompt
-    plan = plan_block(_FILLER.verbosity)
+    plan = plan_block(verbosity)
     # Sesame CSM finding: session-open memory callbacks boost "presence";
     # mid-turn recall reads as creepy. If we have a saved summary from the
     # previous session with this skill, inject one nudge and let the LLM
     # decide whether to reference it naturally.
-    recall = _recall_block(skill.slug)
+    recall = _recall_block(user_id, skill.slug)
     return (
         base
         + "\n\n"
-        + tool_use_block(_FILLER.verbosity, tts_backend)
+        + tool_use_block(verbosity, tts_backend)
         + "\n\n"
-        + tool_response_block(_FILLER.verbosity)
+        + tool_response_block(verbosity)
         + (("\n\n" + plan) if plan else "")
         + "\n\n"
         + repair_block()
@@ -293,8 +292,8 @@ def _effective_prompt(skill: Skill, tts_backend: str) -> str:
     )
 
 
-def _recall_block(skill_slug: str) -> str:
-    summary = load_last_summary(skill_slug)
+def _recall_block(user_id: str, skill_slug: str) -> str:
+    summary = load_last_summary(user_id, skill_slug)
     if not summary:
         return ""
     return f"""\
@@ -330,6 +329,11 @@ def _get_text_client() -> AsyncOpenAI:
 
 
 _TEXT_REACT_MAX_ITERATIONS = int(os.environ.get("TEXT_AGENT_MAX_ITER", "3"))
+# Which user to attribute inbound A2A traffic to. A2A auth is separately
+# gated by A2A_AUTH_TOKEN (shared-secret across the fleet); this var picks
+# a protoVoice user whose skill / memory / verbosity the inbound turn
+# should read from.
+_A2A_USER_ID = os.environ.get("A2A_USER_ID", "default")
 
 
 async def text_agent(message: str, session_id: str) -> str:
@@ -346,7 +350,10 @@ async def text_agent(message: str, session_id: str) -> str:
     import json as _json
 
     _METRICS["a2a_inbound_total"] += 1
-    skill = _active_skill()
+    user_id = _A2A_USER_ID
+    current_user_id.set(user_id)
+    state = user_state_for(user_id)
+    skill = _active_skill(user_id)
     history = _A2A_CONTEXTS.setdefault(session_id, [])
     history.append({"role": "user", "content": message})
 
@@ -356,7 +363,14 @@ async def text_agent(message: str, session_id: str) -> str:
     # System prompt shared with the voice path — blocks for TOOL USE,
     # response shape, plan, repair all apply equally to a text reply.
     messages: list[dict] = [
-        {"role": "system", "content": _effective_prompt(skill, TTS_BACKEND)},
+        {
+            "role": "system",
+            "content": _effective_prompt(
+                skill, TTS_BACKEND,
+                verbosity=state.filler_settings.verbosity,
+                user_id=user_id,
+            ),
+        },
         *history[-(_A2A_MAX_TURNS * 2):],
     ]
     tools_openai = build_text_tool_schemas(session_delegates)
@@ -435,23 +449,36 @@ FRONTEND = os.environ.get("FRONTEND", "auto").lower()
 _handler = SmallWebRTCRequestHandler()
 
 
-async def run_bot(webrtc_connection) -> None:
-    """One bot instance per connected WebRTC client."""
+async def run_bot(webrtc_connection, user_id: str = "default") -> None:
+    """One bot instance per connected WebRTC client.
+
+    `user_id` is resolved at `/api/offer` time from the X-API-Key header
+    and passed in via a closure. Defaults to "default" for direct callers
+    that bypass the auth layer (unlikely in practice — the only entry
+    point is `/api/offer`).
+    """
+    # Set context vars so deep-stack code (tracing spans, session_store
+    # lookups, filler generators) can pick up the right user/session
+    # without needing the id threaded through.
+    current_user_id.set(user_id)
+    user_state = user_state_for(user_id)
+
     # Snapshot the active skill at connect time; the session keeps it even
     # if the operator flips the dropdown mid-call. Matches UX expectation.
-    skill = _active_skill()
+    skill = _active_skill(user_id)
     tts_backend = skill.tts_backend or TTS_BACKEND
-    logger.info(
-        f"[session] skill={skill.slug!r} tts_backend={tts_backend} "
-        f"voice={skill.voice!r} verbosity={_FILLER.verbosity.value}"
-    )
 
-    # Skills may override session-level filler verbosity.
+    # Skills may override per-user filler verbosity.
     if skill.filler_verbosity:
         try:
-            _FILLER.verbosity = Verbosity(skill.filler_verbosity)
+            user_state.filler_settings.verbosity = Verbosity(skill.filler_verbosity)
         except ValueError:
             pass
+
+    logger.info(
+        f"[session] user={user_id!r} skill={skill.slug!r} tts_backend={tts_backend} "
+        f"voice={skill.voice!r} verbosity={user_state.filler_settings.verbosity.value}"
+    )
 
     transport = SmallWebRTCTransport(
         webrtc_connection=webrtc_connection,
@@ -536,9 +563,9 @@ async def run_bot(webrtc_connection) -> None:
     bg_cfg = _resolve_behavior_block(behavior.get("bargein"))
 
     # Backchannel controller — emits brief listener-acks ("mm-hmm") during
-    # long user utterances. Reuses the shared FillerGenerator.
+    # long user utterances. Uses the per-user FillerGenerator.
     bc_kwargs: dict = {
-        "generator": _FILLER_GEN,
+        "generator": _filler_gen_for(user_id),
         "tts_backend": tts_backend,
         "enabled": bc_cfg["enabled"],
     }
@@ -598,7 +625,15 @@ async def run_bot(webrtc_connection) -> None:
             )
 
     context = LLMContext(
-        [{"role": "system", "content": _effective_prompt(skill, tts_backend)}],
+        [{
+            "role": "system",
+            "content": _effective_prompt(
+                skill,
+                tts_backend,
+                verbosity=user_state.filler_settings.verbosity,
+                user_id=user_id,
+            ),
+        }],
         tools=tools_schema,
     )
 
@@ -642,7 +677,7 @@ async def run_bot(webrtc_connection) -> None:
                 continue
             content = msg.get("content") or ""
             if isinstance(content, str) and content and content != skill.system_prompt:
-                save_summary(skill.slug, content)
+                save_summary(user_id, skill.slug, content)
                 return
 
     # RTVI — routes structured client↔server events over the WebRTC data
@@ -756,9 +791,11 @@ async def run_bot(webrtc_connection) -> None:
         silence. Over-narrating past ~8 s starts feeling performative.
         Cancelled on tool completion or barge-in via `_cancel_progress`."""
         try:
+            _fs = user_state.filler_settings
+            _fg = _filler_gen_for(user_id)
             for idx, sleep_secs in enumerate((
-                _FILLER.progress_first_secs,
-                _FILLER.progress_second_secs,
+                _fs.progress_first_secs,
+                _fs.progress_second_secs,
             )):
                 await asyncio.sleep(sleep_secs)
                 with _tracing.span(
@@ -766,7 +803,7 @@ async def run_bot(webrtc_connection) -> None:
                     input={"tool": tool_name, "tier": "first" if idx == 0 else "second"},
                 ) as sp:
                     try:
-                        phrase = await _FILLER_GEN.progress(
+                        phrase = await _fg.progress(
                             tool_name=tool_name,
                             user_utterance=_last_user_text(),
                             tts_backend=tts_backend,
@@ -809,36 +846,41 @@ async def run_bot(webrtc_connection) -> None:
 
     @transport.event_handler("on_client_connected")
     async def _on_connect(_t, _c):
-        global _ACTIVE_DELIVERY, _ACTIVE_TRACER
-        _ACTIVE_DELIVERY = delivery
-        _ACTIVE_TRACER = turn_tracer
-        _tracing.set_active_tracer(turn_tracer)
-        _tracing.start_session(turn_tracer.session_id if hasattr(turn_tracer, "session_id") else "")
+        # Scope delivery + tracer + session to this user.
+        state = user_state_for(user_id)
+        state.active_delivery = delivery
+        state.active_tracer = turn_tracer
+        sid = turn_tracer.session_id if hasattr(turn_tracer, "session_id") else ""
+        state.active_session_id = sid
+        current_session_id.set(sid)
+        _tracing.set_active_tracer(turn_tracer, user_id=user_id)
+        _tracing.start_session(sid)
         _METRICS["sessions_total"] += 1
         _METRICS["sessions_active"] += 1
-        logger.info("client connected")
+        logger.info(f"client connected (user={user_id!r})")
         # Replay any deliveries that arrived while we were disconnected
         # (a2a pushes, slow_research completions, scheduled messages).
         # The controller's bid-then-drain will ask before flushing if
         # there are ≥2 queued items.
-        stashed = drain_stashed_deliveries(skill.slug)
+        stashed = drain_stashed_deliveries(user_id, skill.slug)
         if stashed:
             logger.info(f"[replay] replaying {len(stashed)} stashed delivery(ies)")
             await delivery.replay_stashed(stashed)
 
     @transport.event_handler("on_client_disconnected")
     async def _on_disconnect(_t, _c):
-        global _ACTIVE_DELIVERY, _ACTIVE_TRACER
         logger.info("client disconnected")
         # Persist anything still pending so the next session can replay.
         snapshot = delivery.snapshot_pending()
         for item in snapshot:
-            stash_delivery(skill.slug, item)
-        if _ACTIVE_DELIVERY is delivery:
-            _ACTIVE_DELIVERY = None
-        if _ACTIVE_TRACER is turn_tracer:
-            _ACTIVE_TRACER = None
-            _tracing.set_active_tracer(None)
+            stash_delivery(user_id, skill.slug, item)
+        state = user_state_for(user_id)
+        if state.active_delivery is delivery:
+            state.active_delivery = None
+        if state.active_tracer is turn_tracer:
+            state.active_tracer = None
+            _tracing.set_active_tracer(None, user_id=user_id)
+        state.active_session_id = None
         _tracing.flush()
         _METRICS["sessions_active"] = max(0, _METRICS["sessions_active"] - 1)
         _cancel_progress()
@@ -903,8 +945,14 @@ async def offer(
     bg: BackgroundTasks,
     user: User = Depends(require_user),
 ):
+    # Capture the resolved user id in the closure so run_bot can key
+    # its per-user state correctly. pipecat's on_client_connected
+    # fires synchronously inside handle_web_request after the SDP is
+    # accepted, and can't read FastAPI request headers from there.
+    user_id = user.id
+
     async def on_conn(conn):
-        bg.add_task(run_bot, conn)
+        bg.add_task(run_bot, conn, user_id=user_id)
     return await _handler.handle_web_request(request=req, webrtc_connection_callback=on_conn)
 
 
@@ -916,15 +964,17 @@ async def ice(req: SmallWebRTCPatchRequest, user: User = Depends(require_user)):
 
 @app.get("/healthz")
 async def health():
+    """Public — no auth. Reports process-wide shape, not per-user state."""
     return {
         "status": "ok",
         "stt_backend": STT_BACKEND,
         "tts_backend": TTS_BACKEND,
-        "verbosity": _FILLER.verbosity.value,
+        "auth_source": user_registry.source,
+        "user_count": len(user_registry.all()) if not user_registry.single_user_mode() else 0,
+        "active_sessions": len(active_user_states()),
         "delegates": [
             {"name": d.name, "type": d.type} for d in _DELEGATES.all()
         ],
-        "skill": _ACTIVE_SKILL_SLUG,
         "skills": list(_SKILLS.keys()),
         "audio": {
             "half_duplex": HALF_DUPLEX,
@@ -957,23 +1007,25 @@ async def whoami(user: User = Depends(require_user)):
 
 @app.get("/api/verbosity")
 async def get_verbosity(user: User = Depends(require_user)):
-    return {"verbosity": _FILLER.verbosity.value}
+    return {"verbosity": user_state_for(user.id).filler_settings.verbosity.value}
 
 
 @app.post("/api/verbosity")
 async def set_verbosity(body: dict, user: User = Depends(require_user)):
     from agent.filler import Verbosity
+    state = user_state_for(user.id)
     try:
-        _FILLER.verbosity = Verbosity(body.get("level", "").lower())
+        state.filler_settings.verbosity = Verbosity(body.get("level", "").lower())
     except ValueError:
         return {"error": "level must be silent|brief|narrated|chatty"}
-    return {"verbosity": _FILLER.verbosity.value}
+    return {"verbosity": state.filler_settings.verbosity.value}
 
 
 @app.get("/api/skills")
 async def get_skills(user: User = Depends(require_user)):
+    state = user_state_for(user.id)
     return {
-        "active": _ACTIVE_SKILL_SLUG,
+        "active": state.skill_slug or DEFAULT_SOUL_SLUG,
         "skills": [
             {"slug": s.slug, "name": s.name, "description": s.description}
             for s in _SKILLS.values()
@@ -983,12 +1035,11 @@ async def get_skills(user: User = Depends(require_user)):
 
 @app.post("/api/skills")
 async def set_skill(body: dict, user: User = Depends(require_user)):
-    global _ACTIVE_SKILL_SLUG
     slug = (body.get("slug") or "").strip()
     if slug not in _SKILLS:
         return {"error": f"unknown skill: {slug}", "available": list(_SKILLS.keys())}
-    _ACTIVE_SKILL_SLUG = slug
-    return {"active": _ACTIVE_SKILL_SLUG}
+    user_state_for(user.id).skill_slug = slug
+    return {"active": slug}
 
 
 @app.post("/api/skills/reload")
@@ -1002,7 +1053,11 @@ async def reload_skills_endpoint(user: User = Depends(require_user)):
     """
     global _SKILLS
     _SKILLS = load_skills(CONFIG_DIR)
-    return {"ok": True, "skills": list(_SKILLS.keys()), "active": _ACTIVE_SKILL_SLUG}
+    return {
+        "ok": True,
+        "skills": list(_SKILLS.keys()),
+        "active": user_state_for(user.id).skill_slug or DEFAULT_SOUL_SLUG,
+    }
 
 
 @app.post("/api/users/reload")
@@ -1161,11 +1216,16 @@ if _serve_react():
 
 
 # Inbound A2A — other agents can send us JSON-RPC `message/send`.
+# Delivery + skill attribution on the A2A path currently resolves to the
+# A2A_USER_ID user; true per-caller A2A auth lives in a future phase.
 register_a2a_routes(
     app,
     text_agent=text_agent,
-    delivery_provider=lambda: _ACTIVE_DELIVERY,
-    skill_slug_provider=lambda: _ACTIVE_SKILL_SLUG,
+    delivery_provider=lambda: user_state_for(_A2A_USER_ID).active_delivery,
+    skill_slug_provider=lambda: (
+        user_state_for(_A2A_USER_ID).skill_slug or DEFAULT_SOUL_SLUG
+    ),
+    user_id_provider=lambda: _A2A_USER_ID,
 )
 
 

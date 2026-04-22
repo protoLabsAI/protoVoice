@@ -21,10 +21,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from .delivery import DeliveryController
-from .filler import FillerGenerator, FillerSettings
+from .filler import FillerGenerator, Settings as FillerSettings
 
 logger = logging.getLogger(__name__)
 
@@ -45,23 +43,6 @@ class UserState:
     active_delivery: DeliveryController | None = None
     active_tracer: Any | None = None
     active_session_id: str | None = None
-
-    def filler_gen(
-        self,
-        *,
-        client_factory,
-        model: str,
-        tts_backend: str,
-    ) -> FillerGenerator:
-        """Return (and lazy-init) this user's FillerGenerator."""
-        if self.filler_generator is None:
-            self.filler_generator = FillerGenerator(
-                client_factory=client_factory,
-                model=model,
-                tts_backend=tts_backend,
-                settings=self.filler_settings,
-            )
-        return self.filler_generator
 
 
 class UserStateRegistry:
