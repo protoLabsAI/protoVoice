@@ -47,7 +47,7 @@ except ImportError:
 os.environ.setdefault("HF_HOME", os.environ.get("MODEL_DIR", "/models"))
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, Depends, FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -118,6 +118,8 @@ from agent.tools import (
 )
 from skills.loader import load_skills, write_voice_clone_skill
 from skills.models import DEFAULT_SOUL_SLUG, Skill
+from auth import load_users, require_user, user_registry
+from auth.users import DEFAULT_USER, User
 from voice import lifecycle
 from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt, transcribe_bytes
 from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
@@ -134,6 +136,11 @@ LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "150"))
 LLM_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.7"))
 
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "config"))
+
+# User roster — populated from Infisical first (when INFISICAL_CLIENT_ID
+# is set), else config/users.yaml, else empty (single-user fallback).
+# Gates every /api/* route via require_user.
+load_users(CONFIG_DIR / "users.yaml")
 
 # Skills registry + the currently selected skill. A `SYSTEM_PROMPT` env
 # override wins over the skill's prompt (kept for backwards compat).
@@ -891,14 +898,18 @@ app = FastAPI(title="protoVoice", lifespan=lifespan)
 
 
 @app.post("/api/offer")
-async def offer(req: SmallWebRTCRequest, bg: BackgroundTasks):
+async def offer(
+    req: SmallWebRTCRequest,
+    bg: BackgroundTasks,
+    user: User = Depends(require_user),
+):
     async def on_conn(conn):
         bg.add_task(run_bot, conn)
     return await _handler.handle_web_request(request=req, webrtc_connection_callback=on_conn)
 
 
 @app.patch("/api/offer")
-async def ice(req: SmallWebRTCPatchRequest):
+async def ice(req: SmallWebRTCPatchRequest, user: User = Depends(require_user)):
     await _handler.handle_patch_request(req)
     return {"status": "success"}
 
@@ -925,7 +936,7 @@ async def health():
 
 
 @app.get("/api/metrics")
-async def metrics():
+async def metrics(user: User = Depends(require_user)):
     uptime = time.time() - _METRICS["boot_at"]
     return {
         **_METRICS,
@@ -933,13 +944,24 @@ async def metrics():
     }
 
 
+@app.get("/api/whoami")
+async def whoami(user: User = Depends(require_user)):
+    """Returns the caller's resolved user id + display name. Clients use
+    this to confirm their API key is valid + show the user their name."""
+    return {
+        "id": user.id,
+        "display_name": user.display_name,
+        "auth_source": user_registry.source,
+    }
+
+
 @app.get("/api/verbosity")
-async def get_verbosity():
+async def get_verbosity(user: User = Depends(require_user)):
     return {"verbosity": _FILLER.verbosity.value}
 
 
 @app.post("/api/verbosity")
-async def set_verbosity(body: dict):
+async def set_verbosity(body: dict, user: User = Depends(require_user)):
     from agent.filler import Verbosity
     try:
         _FILLER.verbosity = Verbosity(body.get("level", "").lower())
@@ -949,7 +971,7 @@ async def set_verbosity(body: dict):
 
 
 @app.get("/api/skills")
-async def get_skills():
+async def get_skills(user: User = Depends(require_user)):
     return {
         "active": _ACTIVE_SKILL_SLUG,
         "skills": [
@@ -960,7 +982,7 @@ async def get_skills():
 
 
 @app.post("/api/skills")
-async def set_skill(body: dict):
+async def set_skill(body: dict, user: User = Depends(require_user)):
     global _ACTIVE_SKILL_SLUG
     slug = (body.get("slug") or "").strip()
     if slug not in _SKILLS:
@@ -970,7 +992,7 @@ async def set_skill(body: dict):
 
 
 @app.post("/api/skills/reload")
-async def reload_skills_endpoint():
+async def reload_skills_endpoint(user: User = Depends(require_user)):
     """Re-read every config/skills/*.yaml + SOUL.md from disk.
 
     Safe to call at any time. Active sessions already snapshotted their
@@ -983,8 +1005,18 @@ async def reload_skills_endpoint():
     return {"ok": True, "skills": list(_SKILLS.keys()), "active": _ACTIVE_SKILL_SLUG}
 
 
+@app.post("/api/users/reload")
+async def reload_users_endpoint(user: User = Depends(require_user)):
+    """Re-fetch the user roster from Infisical (if configured) or the
+    YAML file. Safe to call mid-session — active clients keep their
+    authenticated state until they reconnect; new connections use the
+    refreshed registry."""
+    names = user_registry.reload()
+    return {"ok": True, "users": names, "source": user_registry.source}
+
+
 @app.post("/api/delegates/reload")
-async def reload_delegates_endpoint():
+async def reload_delegates_endpoint(user: User = Depends(require_user)):
     """Re-read config/delegates.yaml from disk.
 
     Safe mid-session — delegate lookup happens per `delegate_to()` call,
@@ -1009,7 +1041,7 @@ _SLUG_RE = _re.compile(r"^[a-z0-9][a-z0-9\-_]{1,63}$")
 
 
 @app.get("/api/voice/references")
-async def voice_references():
+async def voice_references(user: User = Depends(require_user)):
     """List the Fish server's saved voice references."""
     if TTS_BACKEND != "fish":
         return {"backend": TTS_BACKEND, "references": []}
@@ -1023,6 +1055,7 @@ async def voice_clone(
     name: str | None = Form(None),
     transcript: str | None = Form(None),
     description: str = Form(""),
+    user: User = Depends(require_user),
 ):
     """Upload a reference clip, optionally auto-transcribe, save on Fish,
     and create a new skill that uses it."""

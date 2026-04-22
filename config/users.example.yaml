@@ -1,0 +1,16 @@
+# protoVoice user roster — API-key auth.
+#
+# Copy this file to `config/users.yaml` and populate with real keys to
+# enable multi-tenant mode. Missing / empty file = single-user fallback
+# (no auth enforced).
+#
+# Generate keys with: python3 -c "import secrets; print('pv_ak_' + secrets.token_urlsafe(32))"
+
+users:
+  - id: alice
+    api_key: pv_ak_REPLACE_ME_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    display_name: Alice
+
+  - id: bob
+    api_key: pv_ak_REPLACE_ME_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    display_name: Bob

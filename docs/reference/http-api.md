@@ -2,6 +2,39 @@
 
 Served by the `protovoice` FastAPI app on `PORT` (default 7866).
 
+## Authentication
+
+Every `/api/*` route requires an API key identifying the caller. Send one of:
+
+```http
+X-API-Key: <key>
+Authorization: Bearer <key>
+```
+
+Keys are resolved to users via the roster loaded from Infisical (when `INFISICAL_CLIENT_ID` + `INFISICAL_CLIENT_SECRET` + `INFISICAL_PROJECT_ID` are set) or `config/users.yaml` as a fallback. See [Personas & Skills → Users](../guides/personas-and-skills).
+
+When no user source is configured (empty registry), protoVoice operates in **single-user fallback mode** — all requests resolve to a synthetic `default` user regardless of credentials. Keeps local dev and existing tailnet-only deployments working unchanged. The moment the registry has ≥1 user, auth enforcement kicks in.
+
+`GET /healthz`, `GET /`, and the PWA static assets stay public (no auth). `GET /.well-known/agent-card.json` + `POST /a2a` use their own `A2A_AUTH_TOKEN` shared-secret scheme — see [A2A Integration](/guides/a2a-integration).
+
+## `GET /api/whoami`
+
+Returns the caller's resolved identity. Clients use this to confirm their API key is valid + display the user's name.
+
+```json
+{
+  "id": "alice",
+  "display_name": "Alice",
+  "auth_source": "infisical"
+}
+```
+
+`auth_source` is `"infisical"`, `"file"`, or `"empty"` (single-user fallback).
+
+## `POST /api/users/reload`
+
+Re-fetches the user roster from the active source (Infisical or `config/users.yaml`). Active clients keep their authenticated state until they reconnect; new connections use the refreshed registry. Returns `{"ok": true, "users": [...], "source": "..."}`.
+
 ## `GET /`
 
 Returns the browser client HTML. Single-page; click Start to connect.

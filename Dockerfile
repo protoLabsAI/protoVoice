@@ -47,6 +47,7 @@ RUN pip install --no-cache-dir \
 COPY app.py ./
 COPY a2a/ ./a2a/
 COPY agent/ ./agent/
+COPY auth/ ./auth/
 COPY config/ ./config/
 COPY skills/ ./skills/
 COPY static/ ./static/
