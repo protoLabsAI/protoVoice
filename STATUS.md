@@ -34,12 +34,37 @@ Updated after v0.6.2 + React frontend migration. Branch: `main`.
 | K25 | Prompt registry migration (Langfuse prompts) | Not load-bearing | v0.7+ |
 | F8 | JWT + JWKS on `/a2a/push` | Shared-secret fine for tailnet | when public-exposed |
 | H15 | Per-skill TTS backend | Stretch, not critical | v0.7+ |
-| G9-G11 | Multi-tenant session keying | Single-user homelab still | v0.7+ |
+| G9-G11 | Multi-tenant session keying | Single-user homelab still — see "Multi-tenant readiness" below | when exposed beyond one user |
 | I16-I18 | Prometheus / HF Spaces / E2E tests | Observability + deploy polish | v0.7+ |
 | J19 | Confidence-aware prosody | Nice-to-have, needs router confidence surface | v0.7+ |
 | — | Transcript panel plugin | Cheap add — RTVI transcripts already flowing | v0.7+ |
 | — | Trace-chip plugin (Langfuse trace id link) | Lands when Langfuse env vars are wired | v0.7+ |
 | — | Per-user server-side preset storage | localStorage fine single-user; server-side blocked on G9 | v0.7+ |
+
+### Multi-tenant readiness (G9) — deferred
+
+Zero value on the tailnet homelab (single user). Becomes a correctness-bug blocker the moment protoVoice is exposed beyond one user: a shared tailnet with multiple people, an HF Spaces demo, per-room deployment, or any public surface.
+
+**Trigger conditions** — do this work before any of:
+- Shared demo URL with concurrent visitors
+- HF Spaces deployment
+- Multi-seat auth being added to the app
+- A partner / third party tailnet peer using the same instance
+
+**Touch points to audit** (current single-tenant assumptions):
+- `_ACTIVE_DELIVERY` (app.py ~line 165) — module-level singleton; second concurrent client overwrites the first's delivery-push state.
+- `_ACTIVE_TRACER` (app.py ~line 168) — same issue for Langfuse spans; cross-contamination between sessions' traces.
+- `session_store.py` — summary files keyed on `{skill_slug}.txt` only. Two users picking the same skill share one file.
+- `_A2A_CONTEXTS` — the A2A inbound context map keyed on the caller-provided session id; collisions possible if two clients send the same context id.
+- Any other `_ACTIVE_*` or `_ACTIVE_FOO` module-level state (grep for them).
+
+**Scope estimate**: ~1-2 days, ~200-400 LOC of mechanical refactor.
+
+**Approach when the time comes**:
+1. Plumb a session id through `run_bot` — use the RTVI connection id or a new UUID minted at `on_client_connected`.
+2. Convert each `_ACTIVE_*` module-level holder to a `Dict[session_id, T]`.
+3. Key session-store paths on `(user_id_or_session_id, skill_slug)`.
+4. Audit + fix each touch point with unit/integration coverage.
 
 ## Waiting on external
 
