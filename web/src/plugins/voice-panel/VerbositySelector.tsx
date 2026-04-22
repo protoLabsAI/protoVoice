@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Label } from '@/components/ui/label';
+import { Field } from '@/components/ui/field';
 import {
   Select,
   SelectContent,
@@ -32,8 +32,7 @@ export function VerbositySelector() {
   };
 
   return (
-    <div className="space-y-1.5">
-      <Label htmlFor="verbosity" className="text-xs text-zinc-400">Verbosity</Label>
+    <Field label="Verbosity" htmlFor="verbosity" error={error}>
       <Select value={level || undefined} onValueChange={onChange}>
         <SelectTrigger id="verbosity" className="w-full">
           <SelectValue placeholder="—" />
@@ -44,7 +43,6 @@ export function VerbositySelector() {
           ))}
         </SelectContent>
       </Select>
-      {error && <div className="text-xs text-red-400">{error}</div>}
-    </div>
+    </Field>
   );
 }

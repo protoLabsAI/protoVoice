@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Field } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Panel } from '@/components/ui/panel';
 import { api } from '@/lib/api';
 
 type Status = 'idle' | 'uploading' | 'done' | 'error';
@@ -42,11 +43,7 @@ export function VoiceCloneForm() {
         return;
       }
       setStatus('done');
-      setMessage(
-        r.auto_transcribed
-          ? `saved. auto-transcript: "${r.transcript}"`
-          : 'saved.',
-      );
+      setMessage(r.auto_transcribed ? `saved. auto-transcript: "${r.transcript}"` : 'saved.');
       setSlug('');
       setName('');
       setTranscript('');
@@ -58,45 +55,41 @@ export function VoiceCloneForm() {
   };
 
   return (
-    <form onSubmit={submit} className="space-y-3">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Voice clone</div>
+    <Panel title="Voice clone">
+      <form onSubmit={submit} className="space-y-3">
+        <Field label="Slug" htmlFor="clone-slug" hint="lowercase, a-z0-9-_">
+          <Input id="clone-slug" value={slug} onChange={(e) => setSlug(e.target.value)} required />
+        </Field>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="clone-slug" className="text-xs text-zinc-400">Slug <span className="text-zinc-600">(lowercase, a-z0-9-_)</span></Label>
-        <Input id="clone-slug" value={slug} onChange={(e) => setSlug(e.target.value)} required />
-      </div>
+        <Field label="Display name" htmlFor="clone-name" hint="optional">
+          <Input id="clone-name" value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="clone-name" className="text-xs text-zinc-400">Display name <span className="text-zinc-600">(optional)</span></Label>
-        <Input id="clone-name" value={name} onChange={(e) => setName(e.target.value)} />
-      </div>
+        <Field label="Audio sample" htmlFor="clone-file">
+          <input
+            id="clone-file"
+            ref={fileRef}
+            type="file"
+            accept="audio/*"
+            className="w-full text-xs text-zinc-300 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border file:border-border file:bg-secondary file:text-secondary-foreground file:cursor-pointer"
+            required
+          />
+        </Field>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="clone-file" className="text-xs text-zinc-400">Audio sample</Label>
-        <input
-          id="clone-file"
-          ref={fileRef}
-          type="file"
-          accept="audio/*"
-          className="w-full text-xs text-zinc-300 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border file:border-border file:bg-secondary file:text-secondary-foreground file:cursor-pointer"
-          required
-        />
-      </div>
+        <Field label="Transcript" htmlFor="clone-transcript" hint="optional — Whisper auto-transcribes if blank">
+          <Input id="clone-transcript" value={transcript} onChange={(e) => setTranscript(e.target.value)} />
+        </Field>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="clone-transcript" className="text-xs text-zinc-400">Transcript <span className="text-zinc-600">(optional — Whisper will auto-transcribe if blank)</span></Label>
-        <Input id="clone-transcript" value={transcript} onChange={(e) => setTranscript(e.target.value)} />
-      </div>
+        <Button type="submit" size="sm" disabled={status === 'uploading'}>
+          {status === 'uploading' ? 'Uploading…' : 'Clone voice'}
+        </Button>
 
-      <Button type="submit" size="sm" disabled={status === 'uploading'}>
-        {status === 'uploading' ? 'Uploading…' : 'Clone voice'}
-      </Button>
-
-      {message && (
-        <div className={`text-xs ${status === 'error' ? 'text-red-400' : 'text-zinc-400'}`}>
-          {message}
-        </div>
-      )}
-    </form>
+        {message && (
+          <div className={`text-xs ${status === 'error' ? 'text-red-400' : 'text-zinc-400'}`}>
+            {message}
+          </div>
+        )}
+      </form>
+    </Panel>
   );
 }

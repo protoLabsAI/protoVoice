@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Label } from '@/components/ui/label';
+import { Field } from '@/components/ui/field';
 import {
   Select,
   SelectContent,
@@ -37,8 +37,7 @@ export function SkillSelector() {
   };
 
   return (
-    <div className="space-y-1.5">
-      <Label htmlFor="skill" className="text-xs text-zinc-400">Skill</Label>
+    <Field label="Skill" htmlFor="skill" error={error}>
       <Select value={active || undefined} onValueChange={onChange}>
         <SelectTrigger id="skill" className="w-full">
           <SelectValue placeholder="—" />
@@ -49,7 +48,6 @@ export function SkillSelector() {
           ))}
         </SelectContent>
       </Select>
-      {error && <div className="text-xs text-red-400">{error}</div>}
-    </div>
+    </Field>
   );
 }
