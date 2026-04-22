@@ -35,10 +35,8 @@ export function StatusPill() {
   if (!text) return null;
 
   return (
-    <div className="pointer-events-none fixed bottom-6 left-1/2 -translate-x-1/2 z-10">
-      <div className="px-4 py-1.5 rounded-full bg-zinc-900/80 border border-zinc-800 text-zinc-300 text-xs font-mono tracking-wide backdrop-blur-sm transition-opacity">
-        {text}
-      </div>
+    <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 z-10 text-zinc-400 text-xs font-mono tracking-wide">
+      {text}
     </div>
   );
 }

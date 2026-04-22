@@ -27,12 +27,11 @@ import {
   clearParams,
   loadCustom,
   loadPalette,
-  loadParams,
   savePalette,
   saveParams,
   saveCustom,
   type CustomPresetMap,
-} from './storage';
+} from '../orb/storage';
 
 export function OrbSettingsPanel() {
   const orb = useOrbInstance();
@@ -50,20 +49,16 @@ export function OrbSettingsPanel() {
     saveTimerRef.current = window.setTimeout(() => saveParams(p), 250);
   }, []);
 
-  // Hydrate UI + orb once on first mount where orb is available.
+  // Sync panel UI with whatever the orb already has. The orb hydrates
+  // itself from localStorage at mount (see OrbCanvas), so the panel just
+  // reads live state rather than re-running hydration.
   useEffect(() => {
     if (!orb || hydratedRef.current) return;
     hydratedRef.current = true;
 
     const savedPalette = loadPalette();
-    const savedParams = loadParams();
-
     if (savedPalette && (PALETTE_NAMES as readonly string[]).includes(savedPalette)) {
       setPalette(savedPalette as PaletteName);
-      orb.setPreset(savedPalette);
-    }
-    if (savedParams) {
-      for (const [k, v] of Object.entries(savedParams)) orb.setParam(k, v);
     }
     setParams(orb.getParams());
     setCustomMap(loadCustom());
@@ -190,33 +185,35 @@ export function OrbSettingsPanel() {
           </Select>
         </div>
 
-        {Object.keys(customMap).length > 0 && (
-          <div className="space-y-1.5">
-            <Label htmlFor="custom" className="text-xs text-zinc-400">Saved</Label>
-            <div className="flex gap-2">
-              <Select value={customName || undefined} onValueChange={onLoadCustom}>
-                <SelectTrigger id="custom" className="flex-1">
-                  <SelectValue placeholder="—" />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.keys(customMap).sort().map((name) => (
-                    <SelectItem key={name} value={name}>{name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={onDeleteCustom}
-                disabled={!customName}
-                aria-label="Delete saved preset"
-                className="h-9 w-9"
-              >
-                ×
-              </Button>
-            </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="custom" className="text-xs text-zinc-400">Saved</Label>
+          <div className="flex gap-2">
+            <Select
+              value={customName || undefined}
+              onValueChange={onLoadCustom}
+              disabled={Object.keys(customMap).length === 0}
+            >
+              <SelectTrigger id="custom" className="flex-1">
+                <SelectValue placeholder={Object.keys(customMap).length === 0 ? '— no saved presets —' : '—'} />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.keys(customMap).sort().map((name) => (
+                  <SelectItem key={name} value={name}>{name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={onDeleteCustom}
+              disabled={!customName}
+              aria-label="Delete saved preset"
+              className="h-9 w-9"
+            >
+              ×
+            </Button>
           </div>
-        )}
+        </div>
 
         <div className="flex flex-wrap gap-2">
           <Button size="sm" onClick={onSaveAs} disabled={!orb}>Save as…</Button>

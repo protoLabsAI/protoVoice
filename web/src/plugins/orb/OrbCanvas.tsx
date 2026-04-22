@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { VoiceOrb } from './viz';
 import { orbInstance } from './instance';
+import { loadPalette, loadParams } from './storage';
 import {
   usePipecatClient,
   usePipecatClientMediaTrack,
@@ -8,6 +9,8 @@ import {
 } from '@pipecat-ai/client-react';
 import { useVoiceStateSelector } from '../../voice/hooks';
 import type { VoiceState } from '../../voice/state';
+
+const BUILTIN_PALETTES = new Set(['Aurora', 'Ember', 'Citrus', 'Forest', 'Noir']);
 
 /**
  * Imperative Three.js mount wrapped in a React component.
@@ -40,7 +43,17 @@ export function OrbCanvas() {
   useEffect(() => {
     if (!hostRef.current) return;
     let cleaned = false;
-    const orb = new VoiceOrb(hostRef.current, { preset: 'Aurora' });
+    // Hydrate palette + params from localStorage BEFORE construction so the
+    // first rendered frame matches what the user had last. Settings panel
+    // (mounted only when drawer opens) used to own this, which meant the
+    // saved style wouldn't apply until the drawer was opened at least once.
+    const savedPalette = loadPalette();
+    const initialPreset = savedPalette && BUILTIN_PALETTES.has(savedPalette) ? savedPalette : 'Aurora';
+    const orb = new VoiceOrb(hostRef.current, { preset: initialPreset });
+    const savedParams = loadParams();
+    if (savedParams) {
+      for (const [k, v] of Object.entries(savedParams)) orb.setParam(k, v);
+    }
     orbRef.current = orb;
     orbInstance.set(orb);
     // Expose for dev-console tinkering, same as static/index.html did.
