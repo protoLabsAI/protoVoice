@@ -56,6 +56,7 @@ _SKILL_KEYS = {
     "behavior",
     "llm",
     "delegates",
+    "viz",
 }
 
 
@@ -97,6 +98,7 @@ def _skill_to_dict(skill: Skill) -> dict[str, Any]:
         "behavior": dict(skill.behavior),
         "llm": dict(skill.llm),
         "delegates": list(skill.delegates),
+        "viz": dict(skill.viz),
     }
 
 
@@ -130,7 +132,7 @@ def _resolve_system_prompt(data: dict[str, Any], path: Path) -> str:
     return ""
 
 
-_DEEP_MERGE_KEYS = {"behavior", "llm"}
+_DEEP_MERGE_KEYS = {"behavior", "llm", "viz"}
 
 
 def _merge(parent: dict[str, Any], child: dict[str, Any]) -> dict[str, Any]:
@@ -180,6 +182,7 @@ def _build_skill(merged: dict[str, Any]) -> Skill | None:
         behavior=dict(merged.get("behavior") or {}),
         llm=dict(merged.get("llm") or {}),
         delegates=list(merged.get("delegates") or []),
+        viz=dict(merged.get("viz") or {}),
     )
 
 

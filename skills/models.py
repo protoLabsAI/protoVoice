@@ -41,6 +41,13 @@ class Skill:
     # Per-skill delegate filter. None/empty = expose all registered delegates.
     # Non-empty list = expose only the named ones through `delegate_to()`.
     delegates: list[str] = field(default_factory=list)
+    # Optional dedicated orb visualizer for this skill. When set, the client
+    # auto-applies it on skill switch: first setVariant(variant), then
+    # applyPreset(palette), then applyParam(k, v) for each entry in params.
+    # Unknown variant names are logged + ignored on the client (registry
+    # lookup fails gracefully).
+    # Shape: { variant?: str, palette?: str, params?: dict[str, any] }
+    viz: dict[str, Any] = field(default_factory=dict)
 
 
 DEFAULT_SOUL_SLUG = "default"

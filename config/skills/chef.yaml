@@ -30,3 +30,13 @@ tools:
   - get_datetime
   - calculator
   - web_search
+
+# Dedicated orb viz for Chef Bruno — warm fire/ice Ember palette,
+# slightly slower + denser than the default to read as "simmering."
+# Clients apply on skill switch; unknown variant names fall back silently.
+viz:
+  variant: fractal
+  palette: Ember
+  params:
+    density: 2.4
+    speed: 0.45

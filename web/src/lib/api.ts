@@ -4,8 +4,18 @@
  * origin in the deployed SPA.
  */
 
-export type Skill = { slug: string; name: string; description?: string };
-export type SkillsResponse = { active: string; skills: Skill[] };
+export type SkillViz = {
+  variant?: string;
+  palette?: string;
+  params?: Record<string, unknown>;
+};
+export type Skill = {
+  slug: string;
+  name: string;
+  description?: string;
+  viz?: SkillViz;
+};
+export type SkillsResponse = { active: string; locked?: boolean; skills: Skill[] };
 export type Verbosity = 'silent' | 'brief' | 'narrated' | 'chatty';
 export type VerbosityResponse = { verbosity: Verbosity };
 
