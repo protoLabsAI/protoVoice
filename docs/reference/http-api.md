@@ -63,6 +63,22 @@ Content-Type: application/json
 
 Applies on the next Start click — skill is snapshotted at connect time. Returns `{"error":"..."}` if the slug is unknown.
 
+## `POST /api/skills/reload`
+
+```http
+POST /api/skills/reload
+```
+
+Re-reads every `config/skills/*.yaml` + `SOUL.md` from disk. Active sessions keep their captured skill snapshot until they reconnect. Returns `{"ok": true, "skills": [...], "active": "<slug>"}`.
+
+## `POST /api/delegates/reload`
+
+```http
+POST /api/delegates/reload
+```
+
+Re-reads `config/delegates.yaml` from disk. Safe mid-session — delegate lookup happens per `delegate_to()` call, so in-flight sessions see the new registry on their next dispatch. Returns `{"ok": true, "delegates": [...]}`.
+
 ## `GET /api/voice/references`
 
 ```json

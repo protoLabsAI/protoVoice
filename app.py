@@ -969,6 +969,34 @@ async def set_skill(body: dict):
     return {"active": _ACTIVE_SKILL_SLUG}
 
 
+@app.post("/api/skills/reload")
+async def reload_skills_endpoint():
+    """Re-read every config/skills/*.yaml + SOUL.md from disk.
+
+    Safe to call at any time. Active sessions already snapshotted their
+    skill at connect; they keep their current snapshot until the next
+    (re)connect. `/healthz` + GET `/api/skills` reflect the new set
+    immediately.
+    """
+    global _SKILLS
+    _SKILLS = load_skills(CONFIG_DIR)
+    return {"ok": True, "skills": list(_SKILLS.keys()), "active": _ACTIVE_SKILL_SLUG}
+
+
+@app.post("/api/delegates/reload")
+async def reload_delegates_endpoint():
+    """Re-read config/delegates.yaml from disk.
+
+    Safe mid-session — delegate lookup happens per `delegate_to()` call,
+    so in-flight sessions see the new registry on their next dispatch.
+    Skills with `delegates:` filters re-apply the filter at next session
+    start (filter is captured per run_bot). Returns the post-reload
+    delegate name list.
+    """
+    names = _DELEGATES.reload()
+    return {"ok": True, "delegates": names}
+
+
 # ---------------------------------------------------------------------------
 # Voice cloning — upload a reference clip, optionally auto-transcribe, save
 # on the Fish server, and stamp a new skill so it shows in the dropdown.

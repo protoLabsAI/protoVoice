@@ -189,6 +189,22 @@ class DelegateRegistry:
     def all(self) -> list[Delegate]:
         return list(self._items.values())
 
+    def reload(self) -> list[str]:
+        """Re-read the YAML from disk and replace the in-memory index.
+        Returns the list of delegate names after reload. Safe to call
+        mid-session — delegate selection happens per-tool-call, so
+        existing sessions pick up the new registry on their next
+        delegate_to() invocation. No-op when this is a filtered copy
+        (no _path set)."""
+        if not self._path:
+            return list(self._items.keys())
+        self._items = {}
+        if self._path.exists():
+            self._load()
+        else:
+            logger.warning(f"[delegates] reload: {self._path} missing, registry now empty")
+        return list(self._items.keys())
+
     def filtered(self, allow: list[str] | None) -> "DelegateRegistry":
         """Return a shallow-copy registry limited to the given names.
 
