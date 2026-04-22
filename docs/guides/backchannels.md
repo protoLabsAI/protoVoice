@@ -37,13 +37,15 @@ The Fish wrapper (`[softly]` or `[whisper] [softly]` if missing) keeps the backc
 |:---|:---|:---|
 | `BACKCHANNEL_FIRST_SECS` | `5.0` | Seconds into a user turn before the first backchannel |
 | `BACKCHANNEL_INTERVAL_SECS` | `6.0` | Interval between subsequent backchannels |
+| `BACKCHANNEL_COMMIT_GRACE_MS` | `180` | Delay between "generator returned" and "emit frame" so state can update |
 
 ## Suppression
 
 - `VERBOSITY=silent` — no backchannels (or any filler) fire.
 - A user turn shorter than `BACKCHANNEL_FIRST_SECS` — no backchannel; timer cancels on stop.
-- **Bot is speaking** — a `UserStartedSpeakingFrame` arriving mid-TTS is treated as echo bleed past the guard; the timer does not start. Any pending backchannel also cancels when `BotStartedSpeakingFrame` fires.
-- **Generator finished too late** — if the generator call completes after the user has stopped or the bot has started responding, the phrase is dropped rather than tacked onto the agent's reply.
+- **Bot is thinking or speaking** — `LLMFullResponseStartFrame` flips `_bot_thinking` before audio even begins (leading indicator), `BotStartedSpeakingFrame` flips `_bot_speaking` when audio starts. Either cancels the loop and blocks new starts.
+- **Generator finished too late** — after the LLM returns the phrase, the emitter waits `BACKCHANNEL_COMMIT_GRACE_MS` (default 180ms) and re-checks state. If user stopped or bot started in that window, the phrase is dropped.
+- **Frame already in flight** — every emitted `TTSSpeakFrame` is tagged. When it re-enters the pipeline via `task.queue_frame`, the backchannel processor re-evaluates state and drops instead of pushing downstream if the world has moved on.
 - LLM generator timeout/error — the backchannel is dropped (logged as warning); the next interval tries again.
 
 ## Why generative

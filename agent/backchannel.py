@@ -12,8 +12,22 @@ On started, kick off a timer task. After `first_after_secs`, emit a
 backchannel via the FillerGenerator. Then continue every
 `interval_secs` until the user stops. Cancel + drain on UserStopped.
 
-This is intentionally minimal — most user turns are <5s and don't need
-a backchannel at all. The defaults err quiet.
+Race defenses (all load-bearing — removing any one reintroduces stale
+"mm-hmm" at the end of the agent's reply):
+
+  1. Leading indicator — `_bot_thinking` flips true on BotLlmStarted
+     (before audio begins), earlier than `_bot_speaking`. Cancels the
+     in-flight loop the moment the agent starts generating.
+  2. Pre-commit grace — after the generator resolves, sleep
+     `COMMIT_GRACE_MS` and re-check state. Catches the case where
+     user-stop + llm-start land between the state check and the emit.
+  3. In-flight drop — every TTSSpeakFrame we emit is tagged. When it
+     re-enters the pipeline (task.queue_frame injects at the top), we
+     re-evaluate state at our processor and drop instead of pushing
+     downstream if the world has moved on.
+
+This is intentionally minimal — most user turns are <5s and never
+trigger a backchannel at all. The defaults err quiet.
 """
 
 from __future__ import annotations
@@ -27,6 +41,8 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     Frame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
@@ -39,8 +55,17 @@ logger = logging.getLogger(__name__)
 
 FIRST_AFTER_SECS = float(os.environ.get("BACKCHANNEL_FIRST_SECS", "5.0"))
 INTERVAL_SECS = float(os.environ.get("BACKCHANNEL_INTERVAL_SECS", "6.0"))
+# Delay between "generator has our phrase" and "we queue the frame".
+# Gives the pipeline a tick to fire BotLlmStarted / UserStopped so the
+# re-check catches them. ~180ms is below perceptual threshold for
+# ambient listener-acks.
+COMMIT_GRACE_MS = int(os.environ.get("BACKCHANNEL_COMMIT_GRACE_MS", "180"))
 
 FrameEmitter = Callable[[Frame], Awaitable[None]]
+
+# Private attribute used to tag our own TTSSpeakFrames so we can
+# identify + drop them if they re-enter us after state changed.
+_BACKCHANNEL_TAG = "_pv_is_backchannel"
 
 
 class BackchannelController(FrameProcessor):
@@ -56,6 +81,7 @@ class BackchannelController(FrameProcessor):
         self._loop_task: asyncio.Task | None = None
         self._emitter: FrameEmitter | None = None
         self._bot_speaking = False
+        self._bot_thinking = False  # BotLlm{Started,Stopped} — leading indicator
         self._user_speaking = False
 
     def set_emitter(self, emitter: FrameEmitter) -> None:
@@ -70,23 +96,44 @@ class BackchannelController(FrameProcessor):
         elif isinstance(frame, UserStoppedSpeakingFrame):
             self._user_speaking = False
             self._cancel_loop()
+        elif isinstance(frame, LLMFullResponseStartFrame):
+            # Leading indicator — agent is about to speak. Fires earlier
+            # than BotStartedSpeaking (which waits for audio).
+            self._bot_thinking = True
+            self._cancel_loop()
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            self._bot_thinking = False
         elif isinstance(frame, BotStartedSpeakingFrame):
             self._bot_speaking = True
-            # Bot is now talking — any pending backchannel is out of place.
             self._cancel_loop()
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._bot_speaking = False
+
+        # In-flight drop: if this is one of OUR backchannel frames passing
+        # back through us (task.queue_frame re-enters at the pipeline top),
+        # refuse to push it downstream when the world has moved on. Without
+        # this the frame stacks in the TTS queue and plays after the agent.
+        if (
+            isinstance(frame, TTSSpeakFrame)
+            and getattr(frame, _BACKCHANNEL_TAG, False)
+            and self._should_drop()
+        ):
+            logger.info("[backchannel] dropping in-flight frame; state changed after emit")
+            return
+
         await self.push_frame(frame, direction)
 
+    def _should_drop(self) -> bool:
+        """Any of these means a backchannel is no longer appropriate."""
+        return self._bot_thinking or self._bot_speaking or not self._user_speaking
+
     def _start_loop(self) -> None:
-        # Suppress entirely when verbosity is SILENT.
         if self._gen.settings.verbosity is Verbosity.SILENT:
             return
-        # Don't start while bot is talking — a UserStartedSpeakingFrame
-        # during agent TTS is almost always echo bleed past the guard.
-        if self._bot_speaking:
+        # Don't start while the agent is already talking — a spurious
+        # UserStartedSpeakingFrame mid-bot-TTS is almost always echo bleed.
+        if self._bot_thinking or self._bot_speaking:
             return
-        # Avoid stacking — if we already have one running, leave it.
         if self._loop_task and not self._loop_task.done():
             return
         self._loop_task = asyncio.create_task(self._loop())
@@ -118,17 +165,27 @@ class BackchannelController(FrameProcessor):
             if not phrase:
                 sp.update(status_message="skipped (empty)")
                 return
-            # The generator call may have taken long enough that the user
-            # has stopped and the bot started responding. Emitting now would
-            # tack an "mm-hmm" onto the end of the agent's reply. Drop it.
-            if self._bot_speaking or not self._user_speaking:
-                sp.update(status_message="skipped (state changed mid-generate)")
+            # First check — after the generator call but before the grace.
+            if self._should_drop():
+                sp.update(status_message="skipped (state changed during generate)")
                 return
+            # Grace window. Lets BotLlmStarted / UserStopped land in the
+            # pipeline before we commit. Without this the race between
+            # "generator resolved" and "agent just started responding" can
+            # still slip a backchannel into the TTS queue behind the reply.
+            await asyncio.sleep(COMMIT_GRACE_MS / 1000.0)
+            if self._should_drop():
+                sp.update(status_message="skipped (state changed during grace)")
+                return
+
             sp.update(output=phrase)
             logger.info(f"[backchannel] {phrase!r}")
             # Backchannels MUST stay out of LLM context — they're listener
             # noises, not assistant turns.
             frame = TTSSpeakFrame(phrase, append_to_context=False)
+            # Tag so the in-flight drop in process_frame can identify this
+            # as one of ours when the queue_frame injection re-enters us.
+            setattr(frame, _BACKCHANNEL_TAG, True)
             if self._emitter is not None:
                 await self._emitter(frame)
             else:
