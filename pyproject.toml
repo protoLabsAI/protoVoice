@@ -40,3 +40,11 @@ protovoice = "app:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    # pipecat imports audioop — flagged by Python 3.13 but we're on 3.12.
+    "ignore::DeprecationWarning:pipecat",
+]

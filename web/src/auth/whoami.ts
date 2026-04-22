@@ -1,9 +1,11 @@
 /**
- * Whoami store — the resolved user's role + pinned values.
+ * Whoami store — the resolved user's role + allowed skills + pinned viz.
  *
- * Loaded once at app boot (via <WhoamiProvider />). The client adapts:
- *   - role: 'admin' sees the skill selector + orb settings
- *   - role: 'user' with pinned_skill sees a locked read-only chip
+ * Loaded once at app boot (via loadWhoami() from App.tsx). The client adapts:
+ *   - role: 'admin' sees the skill selector + orb settings, unconstrained
+ *   - role: 'user' with allowed_skills filters the skill dropdown to that
+ *     set; if only one slug is allowed, a read-only chip replaces the
+ *     selector entirely
  *   - pinned_viz overrides the active skill's viz on session start
  */
 
@@ -11,7 +13,8 @@ export interface Whoami {
   id: string;
   display_name: string;
   role: 'admin' | 'user';
-  pinned_skill: string | null;
+  /** Slugs this user is permitted to activate. `null` = unconstrained. */
+  allowed_skills: string[] | null;
   pinned_viz: Record<string, unknown> | null;
   auth_source: 'infisical' | 'file' | 'empty';
 }

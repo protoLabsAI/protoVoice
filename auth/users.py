@@ -7,9 +7,11 @@ The roster lives in ``config/users.yaml``:
       - id: alice
         api_key: pv_ak_aXXXXXXXXXXXXXX
         display_name: Alice
+        allowed_skills: [josh, chef]
       - id: bob
         api_key: pv_ak_bYYYYYYYYYYYYYY
         display_name: Bob
+        role: admin
 
 Every HTTP request to ``/api/*`` carries ``X-API-Key: <key>``. The key
 resolves to a ``User``; the app scopes per-user state (skill selection,
@@ -57,12 +59,16 @@ class User:
     # Stored as a hash in memory; compared constant-time against incoming keys.
     api_key_hash: str
     # Permission role. "admin" can freely pick skill / viz + edit other
-    # users. "user" (default) is locked to their pinned_skill / pinned_viz.
+    # users. "user" (default) is constrained to ``allowed_skills`` and
+    # their optional ``pinned_viz``.
     role: str = ROLE_USER
-    # Pinned persona / orb. When set, POST /api/skills returns 403 for
-    # this user and the client hides the selectors. Admins are never
-    # pinned — they can always change their own state.
-    pinned_skill: str | None = None
+    # List of skill slugs this user is allowed to activate. ``None`` means
+    # unconstrained (all catalog skills). A one-element list locks the
+    # user to that single skill (client renders a read-only chip). Admins
+    # bypass this check entirely.
+    allowed_skills: tuple[str, ...] | None = None
+    # Optional orb viz override — overrides the active skill's own viz on
+    # session start. Works for any role; admins usually leave it unset.
     pinned_viz: dict | None = None
 
     @staticmethod
@@ -72,6 +78,18 @@ class User:
     @property
     def is_admin(self) -> bool:
         return self.role == ROLE_ADMIN
+
+    def allows_skill(self, slug: str) -> bool:
+        """True if this user is permitted to activate ``slug``.
+
+        Admins are always allowed. For regular users, ``allowed_skills=None``
+        means all slugs pass; otherwise the slug must be in the list.
+        """
+        if self.is_admin:
+            return True
+        if self.allowed_skills is None:
+            return True
+        return slug in self.allowed_skills
 
 
 # Sentinel used when no config/users.yaml is present — the single-user
@@ -143,7 +161,32 @@ class UserRegistry:
                 if role not in (ROLE_USER, ROLE_ADMIN):
                     logger.warning(f"[auth] {uid}: unknown role {role!r}, defaulting to 'user'")
                     role = ROLE_USER
-                pinned_skill = raw.get("pinned_skill") or None
+                allowed_raw = raw.get("allowed_skills")
+                allowed_skills: tuple[str, ...] | None
+                if allowed_raw is None:
+                    allowed_skills = None
+                elif isinstance(allowed_raw, list):
+                    cleaned = [
+                        s.strip() for s in allowed_raw
+                        if isinstance(s, str) and s.strip()
+                    ]
+                    # Empty-list means "no skills allowed" — almost never
+                    # intentional. Log + treat as unconstrained so the user
+                    # doesn't get soft-locked out of every skill.
+                    if not cleaned:
+                        logger.warning(
+                            f"[auth] {uid}: allowed_skills is empty; "
+                            "treating as unconstrained"
+                        )
+                        allowed_skills = None
+                    else:
+                        allowed_skills = tuple(cleaned)
+                else:
+                    logger.warning(
+                        f"[auth] {uid}: allowed_skills must be a list of "
+                        "slugs, ignoring"
+                    )
+                    allowed_skills = None
                 pinned_viz = raw.get("pinned_viz") or None
                 if pinned_viz is not None and not isinstance(pinned_viz, dict):
                     logger.warning(f"[auth] {uid}: pinned_viz must be a mapping, ignoring")
@@ -153,7 +196,7 @@ class UserRegistry:
                     display_name=name,
                     api_key_hash=User.hash_key(key),
                     role=role,
-                    pinned_skill=pinned_skill,
+                    allowed_skills=allowed_skills,
                     pinned_viz=pinned_viz,
                 )
 
@@ -192,7 +235,7 @@ class UserRegistry:
     def by_id(self, user_id: str) -> User | None:
         """Look up a user by id rather than api key. Used by code that
         already has a user_id (e.g. from a ContextVar) and needs role +
-        pinned_skill / pinned_viz info."""
+        allowed_skills / pinned_viz info."""
         if user_id == DEFAULT_USER.id and self.single_user_mode():
             return DEFAULT_USER
         for u in self._by_hash.values():

@@ -19,21 +19,21 @@ When no user source is configured (empty registry), protoVoice operates in **sin
 
 ## `GET /api/whoami`
 
-Returns the caller's resolved identity + role + any admin-set pins. Clients use this to confirm their API key is valid, display the user's name, and branch UI for admin-only controls.
+Returns the caller's resolved identity + role + access-list + any admin-set viz override. Clients use this to confirm their API key is valid, display the user's name, and branch UI for admin-only controls.
 
 ```json
 {
   "id": "alice",
   "display_name": "Alice",
   "role": "user",
-  "pinned_skill": "josh",
+  "allowed_skills": ["josh", "chef"],
   "pinned_viz": { "palette": "Noir" },
   "auth_source": "infisical"
 }
 ```
 
 - `role` — `"user"` (default) or `"admin"`. Admins see the full drawer (Voice + Orb tabs, admin CRUD when shipped); users see Voice only.
-- `pinned_skill` — slug the user is locked to, or `null`. When set, `POST /api/skills` returns `403` and the client shows a read-only chip in place of the skill selector.
+- `allowed_skills` — list of skill slugs the user can activate, or `null` for unconstrained. A one-element list causes the client to render a read-only chip in place of the dropdown.
 - `pinned_viz` — optional `{variant?, palette?, params?}` block that overrides the active skill's `viz`. `null` when unset.
 - `auth_source` — `"infisical"`, `"file"`, or `"empty"` (single-user fallback; the DEFAULT user resolves as admin).
 
@@ -117,8 +117,9 @@ Session-level (module singleton for now); shared across all connected clients. P
 }
 ```
 
-- `active` — the resolved skill for the calling user. Pinned users always see their `pinned_skill` here, regardless of mutable state.
-- `locked` — `true` when the caller has a `pinned_skill`. Clients use this to render a read-only chip in place of the skill dropdown.
+- `active` — the resolved skill for the calling user. For users with `allowed_skills` set, always falls inside that list (snaps to the first entry when mutable state drifts outside).
+- `locked` — `true` when the caller's `allowed_skills` has exactly one entry. Clients use this to render a read-only chip in place of the skill dropdown.
+- `skills[]` — filtered to the caller's `allowed_skills` for non-admins. Admins (and unconstrained users) see the full catalog.
 - `skills[].viz` — optional orb viz block. The client applies it on skill switch (priority: `whoami.pinned_viz → skill.viz → nothing`). See [Orb visualizer](./orb-visualizer).
 
 ## `POST /api/skills`
@@ -132,7 +133,7 @@ Content-Type: application/json
 
 Applies on the next Start click — skill is snapshotted at connect time. Returns `{"error":"..."}` if the slug is unknown.
 
-Returns HTTP `403` with detail `"skill is pinned to '<slug>' by admin"` when the caller has a `pinned_skill` (admins are never pinned — only `user`-role entries hit this path). Admins can change any user's skill via [`POST /api/admin/skills`](#post-apiadminskills) below.
+Returns HTTP `403` with detail `"skill '<slug>' not in allowed_skills for user '<id>'"` when a non-admin caller posts a slug outside their `allowed_skills`. Admins can change any user's skill via [`POST /api/admin/skills`](#post-apiadminskills) below.
 
 ## `POST /api/admin/skills`
 
@@ -151,7 +152,7 @@ Content-Type: application/json
 
 - Requires the caller's role to be `admin` (returns `403` otherwise).
 - Updates the target's in-memory `UserState.skill_slug`. Applies on their next connect; active sessions keep their snapshotted skill.
-- Does **not** modify `pinned_skill` — to change a pin, edit `config/users.yaml` (or the `USERS_YAML` Infisical secret) and `POST /api/users/reload`.
+- Does **not** modify `allowed_skills` — for persistent access-list changes, edit `config/users.yaml` (or the `USERS_YAML` Infisical secret) and `POST /api/users/reload`.
 - Returns `{"error": "..."}` for unknown `user_id` or unknown `slug`.
 
 ## `POST /api/skills/reload`

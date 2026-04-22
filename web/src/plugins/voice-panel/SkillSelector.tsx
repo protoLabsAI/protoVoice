@@ -70,7 +70,11 @@ export function SkillSelector() {
 
   if (locked) {
     const activeSpec = skills.find((s) => s.slug === active);
-    const label = activeSpec?.name ?? active ?? whoami?.pinned_skill ?? '—';
+    const label =
+      activeSpec?.name
+      ?? active
+      ?? whoami?.allowed_skills?.[0]
+      ?? '—';
     return (
       <Field
         label="Skill"
