@@ -86,3 +86,39 @@ This is why persona prompts (SOUL.md, skill YAMLs) **should not hardcode tool na
 The LLM sees the actual tool list (with descriptions) every turn via the OpenAI function-calling contract. That's enough — strong models pick correctly without prompt repetition. If you find a model under-using tools, tighten the tool's own description first; only fall back to prompt-level reinforcement if that doesn't work.
 
 For the dynamic delegate enumeration (`delegate_to`'s `target` enum), that's built at session start from `config/delegates.yaml` — see [Delegates](./delegates).
+
+## Adding a new tool (`@tool` decorator)
+
+Most tools only need a schema, a handler, and a latency tier. The `@tool` decorator in `agent/tools.py` registers all three at import time — no edits to `register_tools`, no entry in a separate latency dict.
+
+```python
+from pipecat.services.llm_service import FunctionCallParams
+from agent.filler import Latency
+from agent.tools import tool
+
+@tool(
+    "weather",
+    "Current weather for a city. Use when the user asks about weather.",
+    parameters={
+        "city": {"type": "string", "description": "City name, e.g. 'Portland, OR'"},
+    },
+    required=["city"],
+    latency=Latency.MEDIUM,   # drives progress-narration cadence
+)
+async def weather_handler(params: FunctionCallParams) -> None:
+    city = params.arguments.get("city", "").strip()
+    # ... fetch weather, format response ...
+    await params.result_callback(f"It's 62°F and overcast in {city}.")
+```
+
+Drop that module where it gets imported at process boot and the tool shows up automatically in both voice and A2A/text paths. Skill `tools:` allowlists pick it up by name on next connection.
+
+### Async tools
+
+Set `async_tool=True` for tools that schedule background work and call `result_callback` later. Pipecat treats async tools as `cancel_on_interruption=False` — the deferred result gets injected back into the LLM context on completion.
+
+The `slow_research` built-in shows the pattern: the decorator-registered handler is a placeholder, and `register_tools` substitutes the real handler that closes over the session's `DeliveryController`. If your async tool needs similar per-session context, follow the same substitution pattern inside `register_tools`.
+
+### Tools that need runtime context
+
+`delegate_to` closes over the per-session delegate registry (which may be filtered by the active skill). It stays hand-wired in `register_tools` rather than using `@tool`, because the decorator-time schema can't express "target enum = whatever the live registry says." If your new tool needs similar runtime context, keep it hand-wired and reference `delegate_to` as the template.

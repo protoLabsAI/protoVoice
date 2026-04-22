@@ -1,20 +1,30 @@
 """Tool registry for the voice agent.
 
-Currently registered:
+New tools register themselves via the ``@tool()`` decorator — no edits
+to ``register_tools`` or hardcoded latency dicts required. The registry
+is the single source of truth for:
 
-  calculator     — safe AST eval of arithmetic expressions (sync)
-  get_datetime   — current date/time in a configurable timezone (sync)
-  web_search     — DuckDuckGo via `ddgs`, top-5 snippets (sync)
-  delegate_to    — single dispatch tool covering A2A agents AND OpenAI-
-                   compat endpoints. Targets are configured in
-                   config/delegates.yaml. Replaces the old deep_research
-                   and a2a_dispatch tools.
-  slow_research  — long-running investigation, async delivery (M3)
+  - name / description / JSON-schema parameters
+  - latency tier (drives progress-narration cadence in DeliveryController)
+  - sync vs async (``async_tool=True`` → ``cancel_on_interruption=False``
+    and the LLM context gets a deferred result injection on completion)
 
-Sync tools block the LLM loop until they return — filler + progress
-fires via the on_function_calls_started hook in app.py. Async tools
-(`cancel_on_interruption=False`) return control immediately and deliver
-via the DeliveryController.
+Example:
+
+    @tool(
+        "calculator",
+        "Evaluate an arithmetic expression",
+        parameters={"expression": {"type": "string", "description": "..."}},
+        required=["expression"],
+        latency=Latency.FAST,
+    )
+    async def calculator_handler(params): ...
+
+Tools that need runtime context (``slow_research`` closes over the
+DeliveryController; ``delegate_to`` closes over the DelegateRegistry +
+push-notification config) are still hand-wired in ``register_tools``.
+That keeps the decorator simple for 95% of tools while leaving an
+escape hatch for the context-heavy 5%.
 """
 
 from __future__ import annotations
@@ -24,7 +34,9 @@ import asyncio
 import logging
 import operator
 import os
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -42,75 +54,231 @@ logger = logging.getLogger(__name__)
 SLOW_RESEARCH_SECS = float(os.environ.get("SLOW_RESEARCH_SECS", "20"))
 DEFAULT_TZ = os.environ.get("TZ", "America/New_York")
 
-# Tool names registered with cancel_on_interruption=False — async path.
-ASYNC_TOOL_NAMES: frozenset[str] = frozenset({"slow_research"})
 
-# Expected-latency hint per tool.
-TOOL_LATENCY: dict[str, Latency] = {
-    "calculator":     Latency.FAST,
-    "get_datetime":   Latency.FAST,
-    "web_search":     Latency.MEDIUM,
-    "delegate_to":    Latency.MEDIUM,
-    "slow_research":  Latency.SLOW,
-}
+# ---------------------------------------------------------------------------
+# Tool registry — @tool() decorator writes here at import time.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ToolSpec:
+    name: str
+    description: str
+    parameters: dict[str, dict[str, Any]]  # JSON-schema properties
+    required: list[str]
+    handler: Callable                       # async (params) -> None
+    latency: Latency = Latency.MEDIUM
+    async_tool: bool = False                # True → cancel_on_interruption=False
+
+
+_TOOL_REGISTRY: dict[str, ToolSpec] = {}
+
+
+def tool(
+    name: str,
+    description: str,
+    *,
+    parameters: dict[str, dict[str, Any]] | None = None,
+    required: list[str] | None = None,
+    latency: Latency = Latency.MEDIUM,
+    async_tool: bool = False,
+):
+    """Decorator — registers an async handler as a tool at import time.
+
+    Every field from the decorator flows into the ToolSpec; no hardcoded
+    latency dict or hand-wired LLM registration needed afterwards.
+    """
+
+    def decorator(handler: Callable):
+        if name in _TOOL_REGISTRY:
+            logger.warning(f"[tools] {name}: duplicate registration, overwriting")
+        _TOOL_REGISTRY[name] = ToolSpec(
+            name=name,
+            description=description,
+            parameters=parameters or {},
+            required=required or [],
+            handler=handler,
+            latency=latency,
+            async_tool=async_tool,
+        )
+        return handler
+
+    return decorator
 
 
 def latency_for(tool_name: str) -> Latency:
-    return TOOL_LATENCY.get(tool_name, Latency.MEDIUM)
+    """Expected latency for a tool — reads the registry. Unknown tools
+    default to MEDIUM. ``delegate_to`` isn't in the registry (hand-wired)
+    so it also falls back to MEDIUM, which matches the historical value."""
+    spec = _TOOL_REGISTRY.get(tool_name)
+    return spec.latency if spec else Latency.MEDIUM
+
+
+# Derived from the registry. Lets app.py keep a `name in ASYNC_TOOL_NAMES`
+# style check without maintaining a parallel frozenset.
+class _AsyncToolNames:
+    def __contains__(self, name: str) -> bool:
+        spec = _TOOL_REGISTRY.get(name)
+        return bool(spec and spec.async_tool)
+
+    def __iter__(self):
+        return iter(
+            name for name, spec in _TOOL_REGISTRY.items() if spec.async_tool
+        )
+
+
+ASYNC_TOOL_NAMES = _AsyncToolNames()
+
+
+def _schema_for(spec: ToolSpec) -> FunctionSchema:
+    return FunctionSchema(
+        name=spec.name,
+        description=spec.description,
+        properties=spec.parameters,
+        required=spec.required,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Schemas — sync tools have static schemas; delegate_to is built per-registry
+# Built-in tools — decorated in-place so they self-register.
 # ---------------------------------------------------------------------------
 
-CALCULATOR_SCHEMA = FunctionSchema(
-    name="calculator",
-    description=(
+_ALLOWED_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.Mod: operator.mod,
+    ast.FloorDiv: operator.floordiv,
+    ast.USub: operator.neg,
+}
+
+
+def _safe_eval(node: ast.AST) -> float:
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.BinOp):
+        op = _ALLOWED_OPS.get(type(node.op))
+        if op is None:
+            raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
+        return op(_safe_eval(node.left), _safe_eval(node.right))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        return -_safe_eval(node.operand)
+    raise ValueError(f"Unsupported expression: {ast.dump(node)}")
+
+
+@tool(
+    "calculator",
+    (
         "Evaluate a basic arithmetic expression. Use ONLY for "
         "calculations the user has explicitly asked you to do."
     ),
-    properties={
+    parameters={
         "expression": {
             "type": "string",
             "description": "Arithmetic expression, e.g. '15 * 1.2 + 3'",
         },
     },
     required=["expression"],
+    latency=Latency.FAST,
 )
+async def calculator_handler(params: FunctionCallParams) -> None:
+    expr = params.arguments.get("expression", "")
+    try:
+        tree = ast.parse(expr.strip(), mode="eval")
+        val = _safe_eval(tree.body)
+        if isinstance(val, float) and val.is_integer():
+            val = int(val)
+        result = f"{expr} equals {val}."
+    except Exception as e:
+        result = f"I couldn't calculate that: {e}."
+    await params.result_callback(result)
 
-DATETIME_SCHEMA = FunctionSchema(
-    name="get_datetime",
-    description="Return the current date and time.",
-    properties={},
-    required=[],
+
+@tool(
+    "get_datetime",
+    "Return the current date and time.",
+    latency=Latency.FAST,
 )
+async def datetime_handler(params: FunctionCallParams) -> None:
+    try:
+        tz = ZoneInfo(DEFAULT_TZ)
+    except (ZoneInfoNotFoundError, Exception):
+        tz = ZoneInfo("UTC")
+    result = datetime.now(tz=tz).strftime(
+        "It's %A, %B %d, %Y at %I:%M %p %Z."
+    )
+    await params.result_callback(result)
 
-WEB_SEARCH_SCHEMA = FunctionSchema(
-    name="web_search",
-    description=(
+
+@tool(
+    "web_search",
+    (
         "Search the web for current information. Use when the user asks "
         "about news, recent events, or facts you're not confident about. "
         "Returns short snippets from the top results."
     ),
-    properties={
+    parameters={
         "query": {"type": "string", "description": "Search query"},
     },
     required=["query"],
+    latency=Latency.MEDIUM,
 )
+async def web_search_handler(params: FunctionCallParams) -> None:
+    query = params.arguments.get("query", "").strip()
+    if not query:
+        await params.result_callback("No search query provided.")
+        return
 
-SLOW_RESEARCH_SCHEMA = FunctionSchema(
-    name="slow_research",
-    description=(
+    def _search() -> str:
+        from ddgs import DDGS
+        with DDGS() as d:
+            results = list(d.text(query, max_results=5))
+        if not results:
+            return "No results found."
+        lines = []
+        for r in results:
+            title = r.get("title") or ""
+            body = r.get("body") or ""
+            lines.append(f"{title}: {body}")
+        return " ".join(lines)
+
+    try:
+        text = await asyncio.to_thread(_search)
+    except Exception as e:
+        logger.warning(f"[web_search] failed: {e}")
+        text = "The search failed — I couldn't reach DuckDuckGo."
+    await params.result_callback(text[:2000])  # keep context manageable
+
+
+# ---------------------------------------------------------------------------
+# Async tool — in the registry so latency_for() + ASYNC_TOOL_NAMES pick it
+# up correctly. The decorated handler is a placeholder; register_tools
+# swaps in the real one that closes over the DeliveryController.
+# ---------------------------------------------------------------------------
+
+@tool(
+    "slow_research",
+    (
         "Kick off a long-running investigation (30s+). Use when the user "
         "doesn't need an immediate answer — they can keep chatting while "
         "the agent will speak the result when it's ready."
     ),
-    properties={
-        "query": {"type": "string", "description": "The question to investigate"},
-    },
+    parameters={"query": {"type": "string", "description": "The question to investigate"}},
     required=["query"],
+    latency=Latency.SLOW,
+    async_tool=True,
 )
+async def _slow_research_placeholder(params: FunctionCallParams) -> None:
+    # Never actually invoked — register_tools substitutes the real handler
+    # built from the session's DeliveryController.
+    raise RuntimeError("slow_research placeholder called without substitution")
 
+
+# ---------------------------------------------------------------------------
+# delegate_to — hand-wired because its schema is dynamic per-session
+# (derived from the live, per-skill-filtered DelegateRegistry).
+# ---------------------------------------------------------------------------
 
 def _delegate_to_schema(registry: DelegateRegistry) -> FunctionSchema:
     """Built dynamically — `target` is enum-restricted to known delegates,
@@ -142,86 +310,6 @@ def _delegate_to_schema(registry: DelegateRegistry) -> FunctionSchema:
         },
         required=["target", "query"],
     )
-
-
-# ---------------------------------------------------------------------------
-# Sync tool implementations
-# ---------------------------------------------------------------------------
-
-_ALLOWED_OPS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.Pow: operator.pow,
-    ast.Mod: operator.mod,
-    ast.FloorDiv: operator.floordiv,
-    ast.USub: operator.neg,
-}
-
-
-def _safe_eval(node: ast.AST) -> float:
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-        return node.value
-    if isinstance(node, ast.BinOp):
-        op = _ALLOWED_OPS.get(type(node.op))
-        if op is None:
-            raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
-        return op(_safe_eval(node.left), _safe_eval(node.right))
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        return -_safe_eval(node.operand)
-    raise ValueError(f"Unsupported expression: {ast.dump(node)}")
-
-
-async def calculator_handler(params: FunctionCallParams) -> None:
-    expr = params.arguments.get("expression", "")
-    try:
-        tree = ast.parse(expr.strip(), mode="eval")
-        val = _safe_eval(tree.body)
-        if isinstance(val, float) and val.is_integer():
-            val = int(val)
-        result = f"{expr} equals {val}."
-    except Exception as e:
-        result = f"I couldn't calculate that: {e}."
-    await params.result_callback(result)
-
-
-async def datetime_handler(params: FunctionCallParams) -> None:
-    try:
-        tz = ZoneInfo(DEFAULT_TZ)
-    except (ZoneInfoNotFoundError, Exception):
-        tz = ZoneInfo("UTC")
-    result = datetime.now(tz=tz).strftime(
-        "It's %A, %B %d, %Y at %I:%M %p %Z."
-    )
-    await params.result_callback(result)
-
-
-async def web_search_handler(params: FunctionCallParams) -> None:
-    query = params.arguments.get("query", "").strip()
-    if not query:
-        await params.result_callback("No search query provided.")
-        return
-
-    def _search() -> str:
-        from ddgs import DDGS
-        with DDGS() as d:
-            results = list(d.text(query, max_results=5))
-        if not results:
-            return "No results found."
-        lines = []
-        for r in results:
-            title = r.get("title") or ""
-            body = r.get("body") or ""
-            lines.append(f"{title}: {body}")
-        return " ".join(lines)
-
-    try:
-        text = await asyncio.to_thread(_search)
-    except Exception as e:
-        logger.warning(f"[web_search] failed: {e}")
-        text = "The search failed — I couldn't reach DuckDuckGo."
-    await params.result_callback(text[:2000])  # keep context manageable
 
 
 def _delegate_to_handler(
@@ -274,10 +362,6 @@ def _delegate_to_handler(
     return _handler
 
 
-# ---------------------------------------------------------------------------
-# Async tool — kept for M3 validation
-# ---------------------------------------------------------------------------
-
 def _slow_research_handler(_controller: DeliveryController):
     """Async tool — the LLM acknowledges via its inline preamble (M10
     TOOL USE prompt block). DO NOT call result_callback in the foreground;
@@ -306,7 +390,7 @@ def _slow_research_handler(_controller: DeliveryController):
 
 
 # ---------------------------------------------------------------------------
-# Registration
+# Text-mode tool runner (A2A inbound ReAct) — unchanged interface.
 # ---------------------------------------------------------------------------
 
 async def run_text_tool(
@@ -323,8 +407,9 @@ async def run_text_tool(
     result_callback. Used by the inbound A2A ReAct loop (F6) so external
     agents can drive the same tool registry the voice path uses.
 
-    Sync tools supported: calculator, get_datetime, web_search, delegate_to.
-    Async tool (slow_research) is NOT exposed here — it requires a live
+    Sync tools that are in the ``@tool``-decorated registry resolve
+    automatically. ``delegate_to`` is hand-handled. Async tools
+    (slow_research) are NOT exposed here — they require a live
     DeliveryController + voice session to narrate back on completion.
     """
     class _P:  # duck-typed FunctionCallParams stand-in
@@ -334,13 +419,13 @@ async def run_text_tool(
         async def result_callback(self, text: Any) -> None:
             self._out = "" if text is None else str(text)
     params = _P(arguments)
-    if name == "calculator":
-        await calculator_handler(params)
-    elif name == "get_datetime":
-        await datetime_handler(params)
-    elif name == "web_search":
-        await web_search_handler(params)
-    elif name == "delegate_to" and delegates is not None:
+
+    spec = _TOOL_REGISTRY.get(name)
+    if spec and not spec.async_tool:
+        await spec.handler(params)
+        return params._out
+
+    if name == "delegate_to" and delegates is not None:
         handler = _delegate_to_handler(
             delegates,
             delivery=None,                      # no voice session; skip progress
@@ -348,20 +433,29 @@ async def run_text_tool(
             push_notification_token=push_notification_token,
         )
         await handler(params)
-    else:
-        return f"(unknown or unavailable tool: {name})"
-    return params._out
+        return params._out
+
+    return f"(unknown or unavailable tool: {name})"
 
 
 def build_text_tool_schemas(delegates: DelegateRegistry | None = None) -> list[dict]:
     """Build the OpenAI tools-parameter list for the text-mode ReAct
     loop. Mirrors the schemas register_tools registers with pipecat,
     minus slow_research (async — see run_text_tool)."""
-    schemas = [CALCULATOR_SCHEMA, DATETIME_SCHEMA, WEB_SEARCH_SCHEMA]
+    schemas: list[FunctionSchema] = [
+        _schema_for(spec)
+        for spec in _TOOL_REGISTRY.values()
+        if not spec.async_tool
+    ]
     if delegates is not None and delegates.names():
         schemas.append(_delegate_to_schema(delegates))
     return [{"type": "function", "function": s.to_default_dict()} for s in schemas]
 
+
+# ---------------------------------------------------------------------------
+# Registration — iterates the registry for decorated tools, hand-wires
+# the context-heavy ones.
+# ---------------------------------------------------------------------------
 
 def register_tools(
     llm: LLMService,
@@ -374,13 +468,9 @@ def register_tools(
 ) -> ToolsSchema:
     """Attach handlers + return the schema for the LLMContext.
 
-    `delegates` — when non-empty, registers `delegate_to` with a schema
-    that enumerates the available targets. When empty/None, the tool is
-    NOT registered (the LLM doesn't see it, so it can't try to call it).
-
-    `push_notification_url` / `push_notification_token` — forwarded to
-    A2A delegate dispatches so remote agents can call back via the
-    /a2a/push endpoint (see D16/D17).
+    Decorated tools (``@tool``) are registered automatically. ``delegate_to``
+    and ``slow_research`` are hand-wired because they close over a runtime
+    controller / registry.
     """
 
     def _wrap_sync(handler):
@@ -393,15 +483,30 @@ def register_tools(
                         on_finish()
                     except Exception as e:
                         logger.warning(f"on_finish hook raised: {e}")
-        _wrapped.__name__ = handler.__name__
+        _wrapped.__name__ = getattr(handler, "__name__", "_wrapped")
         return _wrapped
 
-    llm.register_function("calculator", _wrap_sync(calculator_handler), cancel_on_interruption=True)
-    llm.register_function("get_datetime", _wrap_sync(datetime_handler), cancel_on_interruption=True)
-    llm.register_function("web_search", _wrap_sync(web_search_handler), cancel_on_interruption=True)
+    standard: list[FunctionSchema] = []
 
-    standard = [CALCULATOR_SCHEMA, DATETIME_SCHEMA, WEB_SEARCH_SCHEMA]
+    # Registry-driven tools. slow_research needs runtime delivery context;
+    # skip it when no delivery controller is attached, otherwise substitute
+    # the real handler for its placeholder.
+    for spec in _TOOL_REGISTRY.values():
+        if spec.name == "slow_research":
+            if delivery is None:
+                continue
+            handler = _slow_research_handler(delivery)
+        elif spec.async_tool:
+            handler = spec.handler
+        else:
+            handler = _wrap_sync(spec.handler)
+        llm.register_function(
+            spec.name, handler, cancel_on_interruption=not spec.async_tool
+        )
+        standard.append(_schema_for(spec))
 
+    # delegate_to — dynamic schema built per-session from the delegate
+    # registry, so it stays out of the @tool registry.
     if delegates and delegates.names():
         llm.register_function(
             "delegate_to",
@@ -414,13 +519,5 @@ def register_tools(
             cancel_on_interruption=True,
         )
         standard.append(_delegate_to_schema(delegates))
-
-    if delivery is not None:
-        llm.register_function(
-            "slow_research",
-            _slow_research_handler(delivery),
-            cancel_on_interruption=False,
-        )
-        standard.append(SLOW_RESEARCH_SCHEMA)
 
     return ToolsSchema(standard_tools=standard)
