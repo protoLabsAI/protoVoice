@@ -22,6 +22,7 @@ Task-oriented. Each page assumes you already know what you want to do — if you
 - [Backchannels](./backchannels) — listener-acks ("mm-hmm") during long user turns
 - [Delivery Policies](./delivery-policies) — `now` / `next_silence` / `when_asked` for async tool results
 - [Personas & Skills](./personas-and-skills) — swap voice + system prompt per skill YAML
+- [Users & API Keys](./users) — configure the auth roster (Infisical or `config/users.yaml`)
 - [Audio Handling](./audio-handling) — echo guard, half-duplex, noise filter, smart-turn
 
 ## Extending the agent

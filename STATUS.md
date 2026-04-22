@@ -34,37 +34,34 @@ Updated after v0.6.2 + React frontend migration. Branch: `main`.
 | K25 | Prompt registry migration (Langfuse prompts) | Not load-bearing | v0.7+ |
 | F8 | JWT + JWKS on `/a2a/push` | Shared-secret fine for tailnet | when public-exposed |
 | H15 | Per-skill TTS backend | Stretch, not critical | v0.7+ |
-| G9-G11 | Multi-tenant session keying | Single-user homelab still — see "Multi-tenant readiness" below | when exposed beyond one user |
+| G9 | Multi-tenant Phase 1 — auth + per-user state | **Landed in v0.11.0.** Phases 2 + 3 still deferred — see below. |
 | I16-I18 | Prometheus / HF Spaces / E2E tests | Observability + deploy polish | v0.7+ |
 | J19 | Confidence-aware prosody | Nice-to-have, needs router confidence surface | v0.7+ |
 | — | Transcript panel plugin | Cheap add — RTVI transcripts already flowing | v0.7+ |
 | — | Trace-chip plugin (Langfuse trace id link) | Lands when Langfuse env vars are wired | v0.7+ |
 | — | Per-user server-side preset storage | localStorage fine single-user; server-side blocked on G9 | v0.7+ |
 
-### Multi-tenant readiness (G9) — deferred
+### Multi-tenant status (G9)
 
-Zero value on the tailnet homelab (single user). Becomes a correctness-bug blocker the moment protoVoice is exposed beyond one user: a shared tailnet with multiple people, an HF Spaces demo, per-room deployment, or any public surface.
+**Phase 1 — shipped in v0.11.0.**
+- API-key auth on every `/api/*` route (`X-API-Key` or `Authorization: Bearer`), single-user fallback when the roster is empty.
+- User roster sources: Infisical (primary) → `config/users.yaml` (fallback).
+- Per-user skill / verbosity / delivery / tracer / filler state (no more singleton clobbering when two clients connect).
+- Session memory paths `{SESSION_STORE_DIR}/{user_id}/{skill_slug}.txt`; legacy files auto-migrate to the default user.
+- Langfuse spans stamped with `user_id` + `session_id` via ContextVars.
+- New endpoints: `GET /api/whoami`, `POST /api/users/reload`.
+- Docs: [Users & API Keys guide](./docs/guides/users.md), plus updated HTTP API / environment-variables / memory / delivery-policies / tracing pages.
 
-**Trigger conditions** — do this work before any of:
-- Shared demo URL with concurrent visitors
-- HF Spaces deployment
-- Multi-seat auth being added to the app
-- A partner / third party tailnet peer using the same instance
+**Phase 2 — frontend (deferred).**
+- Drawer setting for API-key paste; stored in localStorage.
+- All `/api/*` fetches send `X-API-Key`.
+- `GET /api/whoami` on boot to display the user's name + detect 401 → prompt.
+- Pipecat client's `/api/offer` handshake gets the header too via `webrtcRequestParams.headers`.
 
-**Touch points to audit** (current single-tenant assumptions):
-- `_ACTIVE_DELIVERY` (app.py ~line 165) — module-level singleton; second concurrent client overwrites the first's delivery-push state.
-- `_ACTIVE_TRACER` (app.py ~line 168) — same issue for Langfuse spans; cross-contamination between sessions' traces.
-- `session_store.py` — summary files keyed on `{skill_slug}.txt` only. Two users picking the same skill share one file.
-- `_A2A_CONTEXTS` — the A2A inbound context map keyed on the caller-provided session id; collisions possible if two clients send the same context id.
-- Any other `_ACTIVE_*` or `_ACTIVE_FOO` module-level state (grep for them).
-
-**Scope estimate**: ~1-2 days, ~200-400 LOC of mechanical refactor.
-
-**Approach when the time comes**:
-1. Plumb a session id through `run_bot` — use the RTVI connection id or a new UUID minted at `on_client_connected`.
-2. Convert each `_ACTIVE_*` module-level holder to a `Dict[session_id, T]`.
-3. Key session-store paths on `(user_id_or_session_id, skill_slug)`.
-4. Audit + fix each touch point with unit/integration coverage.
+**Phase 3 — A2A tightening (deferred).**
+- Per-caller A2A auth against the same users roster (each fleet agent holds its own key).
+- `/a2a/push` target-user resolution via per-session token instead of the current `A2A_USER_ID` env-global fallback.
+- `_A2A_CONTEXTS` namespacing by `(api_principal, context_id)`.
 
 ## Waiting on external
 

@@ -42,6 +42,8 @@ with tracing.span("my.operation", input={...}) as sp:
 
 `tracing.active_trace()` returns the current `user_turn` trace, or a `_NullSpan` when no turn is live. `tracing.span(name, **kwargs)` is a context-manager shortcut that opens/closes a span on the active trace.
 
+Every span is **automatically stamped** with `user_id` + `session_id` read from ContextVars set at the top of each voice / A2A turn. Filter your Langfuse traces by user or session without threading ids through every call site. The active-tracer registry itself is per-user (`dict[user_id, tracer]`) so concurrent sessions keep their traces isolated.
+
 ### Automatic LLM tracing
 
 `FillerGenerator` imports `AsyncOpenAI` from `langfuse.openai` when `LANGFUSE_*` env is set; every filler / backchannel / progress LLM call becomes a generation span automatically, with prompt + completion + token usage captured.

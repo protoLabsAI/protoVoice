@@ -30,7 +30,7 @@ Either threshold alone fires a summary — use whichever shape matters for your 
 
 ## Cross-session persistence (session-open callbacks)
 
-When pipecat's summarizer emits `on_summary_applied`, the rolling summary is also written to `{SESSION_STORE_DIR}/{skill_slug}.txt` (default `/tmp/protovoice_sessions/`). At the start of the NEXT session with the same skill, `_effective_prompt` injects a one-paragraph recall block:
+When pipecat's summarizer emits `on_summary_applied`, the rolling summary is also written to `{SESSION_STORE_DIR}/{user_id}/{skill_slug}.txt` (default `/tmp/protovoice_sessions/`). At the start of the NEXT session by the same user with the same skill, `_effective_prompt` injects a one-paragraph recall block:
 
 > Last time the user and this persona spoke, it went roughly: …
 > IF it fits naturally, acknowledge this in your first turn …
@@ -39,8 +39,9 @@ Sesame CSM research ([Crossing the Uncanny Valley of Voice](https://www.sesame.c
 
 ## Intentional non-features
 
-- **No per-user keying.** Single-user homelab today — one summary file per skill, not per user. Multi-tenant keying is future work.
 - **No semantic recall.** No vector search. Just a rolling summary + recent window.
+- **No cross-user memory sharing.** `alice`'s Chef session can't see `bob`'s Chef summary, by design. Each `{user_id}/{skill_slug}.txt` is its own lane.
+- **Legacy single-user files auto-migrate** on first access by the default user. Pre-v0.11 deployments with `/tmp/protovoice_sessions/chef.txt` get moved to `/tmp/protovoice_sessions/default/chef.txt` automatically.
 
 ## Observing it
 

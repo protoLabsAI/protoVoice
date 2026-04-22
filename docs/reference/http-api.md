@@ -41,16 +41,30 @@ Returns the browser client HTML. Single-page; click Start to connect.
 
 ## `GET /healthz`
 
+Public — no auth. Reports process-wide shape, not per-user state.
+
 ```json
 {
   "status": "ok",
+  "stt_backend": "local",
   "tts_backend": "fish",
-  "verbosity": "brief",
-  "known_agents": ["ava"],
-  "skill": "default",
-  "skills": ["default", "chef"]
+  "auth_source": "infisical",
+  "user_count": 3,
+  "active_sessions": 1,
+  "delegates": [{"name": "ava", "type": "openai"}],
+  "skills": ["default", "chef", "voice-01"],
+  "audio": {
+    "half_duplex": false,
+    "echo_guard_ms": 300,
+    "noise_filter": "off",
+    "smart_turn": "off"
+  }
 }
 ```
+
+- `auth_source` — `"infisical"`, `"file"`, or `"empty"` (single-user fallback)
+- `user_count` — size of the roster (0 in single-user mode)
+- `active_sessions` — users with a live voice connection right now
 
 Used by Docker HEALTHCHECK and external monitoring.
 
@@ -59,6 +73,8 @@ Used by Docker HEALTHCHECK and external monitoring.
 ```json
 {"verbosity":"brief"}
 ```
+
+Scoped to the calling user. Each user has their own verbosity setting.
 
 ## `POST /api/verbosity`
 

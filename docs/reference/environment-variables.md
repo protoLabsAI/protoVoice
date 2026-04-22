@@ -100,6 +100,23 @@ When all three are set, each user turn becomes a trace. Unset → no-op. See [Tr
 | Variable | Default | Purpose |
 |:---|:---|:---|
 | `CONFIG_DIR` | `config` | Where SOUL.md + skills/ + agents.yaml live |
+| `SESSION_STORE_DIR` | `/tmp/protovoice_sessions` | Per-user session summaries + pending deliveries (`{user_id}/{skill_slug}.txt`) |
+
+## Auth (API-key users)
+
+Every `/api/*` route requires `X-API-Key: <key>` or `Authorization: Bearer <key>`. Keys resolve to users via the roster loaded from Infisical (primary) or a local YAML file (fallback). Empty roster = single-user fallback.
+
+| Variable | Default | Purpose |
+|:---|:---|:---|
+| `INFISICAL_API_URL` | `https://app.infisical.com` | Infisical API base (override for self-hosted pve01, etc.) |
+| `INFISICAL_CLIENT_ID` | *(unset)* | Machine-identity id — presence of this + SECRET + PROJECT_ID enables Infisical mode |
+| `INFISICAL_CLIENT_SECRET` | *(unset)* | Machine-identity secret |
+| `INFISICAL_PROJECT_ID` | *(unset)* | Infisical workspace/project id |
+| `INFISICAL_ENVIRONMENT` | `prod` | Env slug within the project |
+| `INFISICAL_SECRET_PATH` | `/protovoice` | Folder path for the roster secret |
+| `INFISICAL_USERS_SECRET_NAME` | `USERS_YAML` | Secret name — the full users.yaml content |
+
+When Infisical isn't configured, protoVoice falls back to `{CONFIG_DIR}/users.yaml`. See [Users guide](../guides/users) for the roster shape.
 
 ## Delegate authentication
 
@@ -119,6 +136,7 @@ Add more as you extend the registry.
 | Variable | Default | Purpose |
 |:---|:---|:---|
 | `A2A_AUTH_TOKEN` | *(unset)* | Shared secret required on inbound `/a2a`. When set, requests must carry `X-API-Key: <token>` or `Authorization: Bearer <token>`. Unset = anonymous inbound. |
+| `A2A_USER_ID` | `default` | Which protoVoice user inbound A2A turns attribute to (skill / memory / verbosity / stashed deliveries all resolve under this id). True per-caller A2A auth is future work. |
 | `AGENT_NAME` | `protovoice` | Advertised name in the agent card |
 | `AGENT_VERSION` | `0.2.0` | Advertised version in the agent card |
 | `A2A_MAX_TURNS` | `10` | Per-contextId history cap for inbound text turns |

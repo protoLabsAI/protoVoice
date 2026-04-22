@@ -103,11 +103,11 @@ Pattern borrowed from [ProMemAssist](https://arxiv.org/pdf/2507.21378) (UIST '25
 
 ## Cross-session replay (reconnect)
 
-If the user disconnects before a delivery lands — or an A2A push / `slow_research` result arrives while no voice session is live — the item is stashed to `{SESSION_STORE_DIR}/{skill_slug}.pending.json` (default `/tmp/protovoice_sessions/`).
+If the user disconnects before a delivery lands — or an A2A push / `slow_research` result arrives while no voice session is live — the item is stashed to `{SESSION_STORE_DIR}/{user_id}/{skill_slug}.pending.json` (default `/tmp/protovoice_sessions/`).
 
-On the next session connect with the same skill:
+On the next session connect by the same user with the same skill:
 
-1. `drain_stashed_deliveries(skill_slug)` reads + deletes the file.
+1. `drain_stashed_deliveries(user_id, skill_slug)` reads + deletes the file.
 2. Items are re-enqueued via `delivery.replay_stashed(...)`.
 3. If there are ≥ 2, the [bid-then-drain](#bid-then-drain-%E2%89%A5-2-items) path kicks in automatically — the agent asks "I've got updates from ava and slow_research — want to hear them?" before flushing.
 
