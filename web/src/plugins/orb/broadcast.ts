@@ -1,42 +1,28 @@
 /**
- * Orb parameter broadcaster. The settings panel calls applyParam /
- * applyPreset instead of orb.setParam / orb.setPreset directly, so
- * multiple orb instances (e.g. main + mobile preview) can stay in sync.
+ * Broadcast helpers. The settings panel writes through these; the
+ * active variant component reads the resulting snapshot via useOrbState().
  *
- * The main orb instance is still the single source of truth for
- * getParams(); listeners only observe side-effects going out.
+ * Kept as a thin re-export of the underlying orbStore for API stability
+ * during the migration. Consumers don't need to know whether there's one
+ * orb or two (main + mobile preview); both subscribe to the same store.
  */
 
-import { orbInstance } from './instance';
+import { orbStore } from './store';
+export { orbStore } from './store';
+export type { OrbStateSnapshot } from './store';
 
-export type ParamListener = (key: string, value: unknown) => void;
-export type PresetListener = (name: string) => void;
-
-const paramListeners = new Set<ParamListener>();
-const presetListeners = new Set<PresetListener>();
-
-/** Set a param on the main orb and broadcast to all subscribers. */
 export function applyParam(key: string, value: unknown): void {
-  orbInstance.get()?.setParam(key, value);
-  paramListeners.forEach((l) => l(key, value));
+  orbStore.get().setParam(key, value);
 }
 
-/** Set a palette preset on the main orb and broadcast. */
-export function applyPreset(name: string): void {
-  orbInstance.get()?.setPreset(name);
-  presetListeners.forEach((l) => l(name));
+export function applyPreset(paletteName: string): void {
+  orbStore.get().setPreset(paletteName);
 }
 
-export function subscribeParam(l: ParamListener): () => void {
-  paramListeners.add(l);
-  return () => {
-    paramListeners.delete(l);
-  };
+export function setVariant(id: string): void {
+  orbStore.get().setVariant(id);
 }
 
-export function subscribePreset(l: PresetListener): () => void {
-  presetListeners.add(l);
-  return () => {
-    presetListeners.delete(l);
-  };
+export function loadCustomPreset(name: string): void {
+  orbStore.get().loadCustomPreset(name);
 }

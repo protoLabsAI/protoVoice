@@ -1,106 +1,74 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Panel } from '@/components/ui/panel';
-import { useOrbInstance } from './useOrbInstance';
 import { FieldSlider } from './FieldSlider';
 import { FieldColor } from './FieldColor';
 import { PresetControls } from './PresetControls';
+import { VariantPicker } from './VariantPicker';
 import {
-  FIELDS,
-  PALETTE_NAMES,
   SECTIONS,
   formatPresetBlock,
   randomHex,
   randomSliderValue,
   type FieldSpec,
-  type PaletteName,
-} from './fields';
+} from '../orb/shared/field-types';
 import {
-  clearParams,
   loadCustom,
-  loadPalette,
-  savePalette,
-  saveParams,
   saveCustom,
   type CustomPresetMap,
 } from '../orb/storage';
-import { applyParam, applyPreset } from '../orb/broadcast';
+import {
+  applyParam,
+  applyPreset,
+  loadCustomPreset,
+} from '../orb/broadcast';
+import { useActiveVariant, useOrbState } from '../orb/useOrbState';
 
 export function OrbSettingsPanel() {
-  const orb = useOrbInstance();
-  const [params, setParams] = useState<Record<string, unknown>>({});
-  const [palette, setPalette] = useState<PaletteName>('Aurora');
-  const [customMap, setCustomMap] = useState<CustomPresetMap>({});
+  const variant = useActiveVariant();
+  const { palette, params } = useOrbState();
+  const [customMap, setCustomMap] = useState<CustomPresetMap>(() => loadCustom());
   const [customName, setCustomName] = useState<string>('');
   const [copyLabel, setCopyLabel] = useState<string>('Copy config');
-  const hydratedRef = useRef(false);
 
-  // Debounced save on every change.
-  const saveTimerRef = useRef<number | null>(null);
-  const scheduleSave = useCallback((p: Record<string, unknown>) => {
-    if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = window.setTimeout(() => saveParams(p), 250);
+  // Refresh custom presets if storage changes in another tab / on mount.
+  useEffect(() => {
+    setCustomMap(loadCustom());
   }, []);
 
-  // Sync panel UI with whatever the orb already has — the orb hydrates
-  // itself from localStorage at mount (OrbCanvas), so the panel just
-  // reads live state.
+  // Debounced save timer — broadcast.applyParam already persists, so this
+  // is just a ref holder for any future flush-on-unmount needs.
+  const saveTimerRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!orb || hydratedRef.current) return;
-    hydratedRef.current = true;
+    return () => {
+      if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
+    };
+  }, []);
 
-    const savedPalette = loadPalette();
-    if (savedPalette && (PALETTE_NAMES as readonly string[]).includes(savedPalette)) {
-      setPalette(savedPalette as PaletteName);
-    }
-    setParams(orb.getParams());
-    setCustomMap(loadCustom());
-  }, [orb]);
-
-  const updateParam = useCallback(
-    (key: string, value: unknown) => {
-      applyParam(key, value);
-      setParams((prev) => {
-        const next = { ...prev, [key]: value };
-        scheduleSave(next);
-        return next;
-      });
-    },
-    [scheduleSave],
-  );
+  const updateParam = useCallback((key: string, value: unknown) => {
+    applyParam(key, value);
+  }, []);
 
   const onPaletteChange = (name: string) => {
-    if (!orb) return;
-    setPalette(name as PaletteName);
     applyPreset(name);
-    setParams(orb.getParams());
-    savePalette(name);
-    clearParams();
   };
 
   const onReset = () => {
-    if (!orb) return;
     applyPreset(palette);
-    setParams(orb.getParams());
-    clearParams();
     setCustomName('');
   };
 
   const onRandomize = () => {
-    if (!orb) return;
-    const next: Record<string, unknown> = {};
-    for (const spec of FIELDS) {
+    if (!variant) return;
+    for (const spec of variant.fields) {
       const v = spec.kind === 'color' ? randomHex() : randomSliderValue(spec);
       applyParam(spec.key, v);
-      next[spec.key] = v;
     }
-    setParams(next);
-    saveParams(next);
     setCustomName('');
   };
 
   const onCopy = async () => {
-    if (!orb) return;
-    const snippet = formatPresetBlock(orb.getParams(), 'NewPreset');
+    if (!variant) return;
+    const snippet = formatPresetBlock(variant.fields, params, 'NewPreset');
     let ok = false;
     try {
       await navigator.clipboard.writeText(snippet);
@@ -120,12 +88,11 @@ export function OrbSettingsPanel() {
   };
 
   const onSaveAs = () => {
-    if (!orb) return;
     const name = (window.prompt('Save preset as:') ?? '').trim();
     if (!name) return;
     const next: CustomPresetMap = {
       ...customMap,
-      [name]: { palette, params: orb.getParams() },
+      [name]: { palette, params: { ...params } },
     };
     setCustomMap(next);
     saveCustom(next);
@@ -133,18 +100,9 @@ export function OrbSettingsPanel() {
   };
 
   const onLoadCustom = (name: string) => {
-    if (!orb || !name) return;
-    const payload = customMap[name];
-    if (!payload) return;
-    if (payload.palette) {
-      setPalette(payload.palette as PaletteName);
-      applyPreset(payload.palette);
-    }
-    for (const [k, v] of Object.entries(payload.params ?? {})) applyParam(k, v);
-    setParams(orb.getParams());
+    if (!name) return;
+    loadCustomPreset(name);
     setCustomName(name);
-    if (payload.palette) savePalette(payload.palette);
-    saveParams(orb.getParams());
   };
 
   const onDeleteCustom = () => {
@@ -157,10 +115,16 @@ export function OrbSettingsPanel() {
     setCustomName('');
   };
 
+  if (!variant) return null;
+
+  const paletteNames = Object.keys(variant.palettes);
+
   return (
     <div className="space-y-5">
+      <VariantPicker />
       <PresetControls
         palette={palette}
+        paletteNames={paletteNames}
         onPaletteChange={onPaletteChange}
         customMap={customMap}
         customName={customName}
@@ -171,14 +135,14 @@ export function OrbSettingsPanel() {
         onCopy={onCopy}
         onReset={onReset}
         copyLabel={copyLabel}
-        disabled={!orb}
+        disabled={false}
       />
 
       {SECTIONS.map((s) => (
         <SettingsSection
           key={s.id}
           title={s.label}
-          fields={FIELDS.filter((f) => f.section === s.id)}
+          fields={variant.fields.filter((f) => f.section === s.id)}
           params={params}
           onChange={updateParam}
         />

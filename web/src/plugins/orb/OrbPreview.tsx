@@ -1,62 +1,48 @@
-import { useEffect, useRef } from 'react';
-import { VoiceOrb } from './viz';
-import { orbInstance } from './instance';
-import { subscribeParam, subscribePreset } from './broadcast';
-import { loadPalette } from './storage';
-import { useVoiceStateSelector } from '../../voice/hooks';
-import type { VoiceState } from '../../voice/state';
-
-const BUILTIN = new Set(['Aurora', 'Ember', 'Citrus', 'Forest', 'Noir']);
+import { Canvas } from '@react-three/fiber';
+import { EffectComposer } from '@react-three/postprocessing';
+import { useEffect, useMemo } from 'react';
+import { useFrame } from '@react-three/fiber';
+import { useActiveVariant, useOrbState } from './useOrbState';
+import { useVoiceStateSelector } from '@/voice/hooks';
+import { LumaChromaticAberrationEffect } from './shared/chromaticAberration';
+import type { FractalPreset } from './variants/fractal/presets';
 
 /**
- * Secondary VoiceOrb for the mobile drawer — mirrors the main orb's
- * parameters via the broadcast bus, so users can watch settings take
- * effect while the main orb is occluded by the full-width drawer.
- *
- * Kept cheap:
- *   - small fixed canvas (driven by the host div size)
- *   - doesn't register as orbInstance — stays read-only
- *   - audio stream intentionally not piped in; this is about visible
- *     settings changes, not level-reactive bloom
+ * Secondary orb canvas for the mobile drawer. Mirrors the main orb's
+ * state via the orbStore (every variant reads from it). No audio pipe
+ * — this is a settings preview, not an audio-reactive clone.
  */
 export function OrbPreview() {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const orbRef = useRef<VoiceOrb | null>(null);
-  const state: VoiceState = useVoiceStateSelector((s) => s.state);
+  const variant = useActiveVariant();
+  const voiceState = useVoiceStateSelector((s) => s.state);
 
-  useEffect(() => {
-    if (!hostRef.current) return;
-    let cleaned = false;
+  if (!variant) return null;
+  const Variant = variant.Component;
 
-    const savedPalette = loadPalette();
-    const initialPreset = savedPalette && BUILTIN.has(savedPalette) ? savedPalette : 'Aurora';
-    const orb = new VoiceOrb(hostRef.current, { preset: initialPreset });
+  return (
+    <Canvas
+      camera={{ fov: 45, near: 0.1, far: 100, position: [0, 0, 13] }}
+      dpr={0.7}
+      gl={{ antialias: true, alpha: false }}
+      className="absolute inset-0"
+    >
+      <color attach="background" args={['#000000']} />
+      <Variant voiceState={voiceState} botStream={null} localStream={null} />
+      <EffectComposer enabled>
+        <CADriver />
+      </EffectComposer>
+    </Canvas>
+  );
+}
 
-    // Sync from main orb's current state so the preview matches.
-    const main = orbInstance.get();
-    if (main) {
-      for (const [k, v] of Object.entries(main.getParams())) orb.setParam(k, v);
-    }
-
-    // Subsequent changes flow through the broadcast bus.
-    const unsubParam = subscribeParam((k, v) => orb.setParam(k, v));
-    const unsubPreset = subscribePreset((name) => orb.setPreset(name));
-
-    orbRef.current = orb;
-    return () => {
-      if (cleaned) return;
-      cleaned = true;
-      unsubParam();
-      unsubPreset();
-      orb.dispose?.();
-      orbRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    orbRef.current?.setState?.(state);
-  }, [state]);
-
-  // Caller owns the sized container. We fill it with a Three.js canvas.
-  return <div ref={hostRef} className="absolute inset-0" />;
+function CADriver() {
+  const { params } = useOrbState();
+  const base = params as unknown as FractalPreset;
+  const effect = useMemo(() => new LumaChromaticAberrationEffect({ amount: 0.025 }), []);
+  useFrame(() => {
+    const target = Math.min(0.05, (base.chromaticAberration ?? 0.022) * 0.9);
+    effect.setAmount(target);
+  });
+  useEffect(() => () => effect.dispose(), [effect]);
+  return <primitive object={effect} />;
 }

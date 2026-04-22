@@ -8,17 +8,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { PALETTE_NAMES, type PaletteName } from './fields';
 import type { CustomPresetMap } from '../orb/storage';
 
 /**
  * The preset section of the orb drawer: palette dropdown, saved
  * presets dropdown, and the Save/Randomize/Copy/Reset button row.
- * Callbacks are lifted — this component is presentation-only, the
- * owning panel decides what they do.
+ * Presentation-only; callbacks + palette list are lifted.
  */
 export function PresetControls({
   palette,
+  paletteNames,
   onPaletteChange,
   customMap,
   customName,
@@ -31,7 +30,8 @@ export function PresetControls({
   copyLabel,
   disabled,
 }: {
-  palette: PaletteName;
+  palette: string;
+  paletteNames: string[];
   onPaletteChange: (name: string) => void;
   customMap: CustomPresetMap;
   customName: string;
@@ -55,7 +55,7 @@ export function PresetControls({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {PALETTE_NAMES.map((name) => (
+            {paletteNames.map((name) => (
               <SelectItem key={name} value={name}>{name}</SelectItem>
             ))}
           </SelectContent>
@@ -65,7 +65,7 @@ export function PresetControls({
       <Field label="Saved" htmlFor="custom">
         <div className="flex gap-2">
           <Select
-            value={customName || undefined}
+            value={customName}
             onValueChange={onLoadCustom}
             disabled={savedEmpty}
           >

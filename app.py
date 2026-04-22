@@ -1013,20 +1013,18 @@ if _serve_react():
         StaticFiles(directory=str(WEB_DIST / "assets")),
         name="assets",
     )
-    # Root-level SPA artifacts (manifest, service worker, icons, favicon).
-    for fname in ("manifest.webmanifest", "sw.js", "favicon.svg",
-                  "pwa-192.png", "pwa-512.png", "pwa-maskable-512.png"):
-        fpath = WEB_DIST / fname
-        if not fpath.exists():
+    # Root-level SPA artifacts — manifest, service worker + registration
+    # shim, workbox chunks (hash-named so they change per build), icons,
+    # favicon. Enumerated from dist/ at startup so new Vite-emitted files
+    # don't require a route update.
+    for fpath in WEB_DIST.iterdir():
+        if not fpath.is_file() or fpath.name == "index.html":
             continue
 
         async def _serve_fixed(path=str(fpath)):
             return FileResponse(path)
 
-        app.add_api_route(f"/{fname}", _serve_fixed, methods=["GET"])
-    # Also serve any other top-level files Vite emitted under dist/.
-    # Workbox shim files are hash-named; the ASSETS mount covers them if
-    # they land under /assets/. sw.js stays at root, handled above.
+        app.add_api_route(f"/{fpath.name}", _serve_fixed, methods=["GET"])
 
 
 # Inbound A2A — other agents can send us JSON-RPC `message/send`.
