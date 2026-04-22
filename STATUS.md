@@ -1,151 +1,125 @@
-# Tonight's Status — Pickup for Tomorrow
+# Status — pickup for next session
 
-Updated after v0.6.2 + React frontend migration. Branch: `main`.
+Updated after v0.12.1. Branch: `main`.
 
 ## TL;DR
 
-**React frontend migration shipped.** `web/` (bun + Vite 6 + React 19 + shadcn/ui + Tailwind 4 + PWA) replaces vanilla `static/index.html` at `/`. Legacy shell stays mounted at `/static/legacy/` behind `FRONTEND=vanilla` for instant rollback. RTVI protocol fully consumed — orb state is driven by authoritative events, not audio-RMS heuristics. Plugin architecture in place with UI-slot registry for future extensibility.
+Multi-tenant Phase 1.5 shipped across v0.11.0 → v0.12.1: API-key auth, per-user state, role-based access (`admin` vs `user`), skill-access control via `allowed_skills`, per-user `pinned_viz`, and dedicated orb viz per skill. First test suite in the repo landed with v0.12.1 (33 tests, pytest). Running at `https://protolabs.taild25506.ts.net/`; containers at `ghcr.io/protolabsai/protovoice:v0.12.1` + `:latest`.
 
 ## Where we are
 
 ### Deployed
-- Running at `https://protolabs.taild25506.ts.net/` (tailnet-only, ava Blackwell node, Fish S2-Pro TTS, Qwen 3.6-35B via host vLLM on `:8000`).
-- Docker image: `ghcr.io/protolabsai/protovoice:v0.6.0` and `:latest`.
-- Docs: `https://protolabsai.github.io/protoVoice/` — latest pages include Tracing + Tracing Contract.
+- `https://protolabs.taild25506.ts.net/` (tailnet-only, ava Blackwell node, Fish S2-Pro TTS, Qwen 3.6-35B via host vLLM on `:8000`).
+- Docker images: `ghcr.io/protolabsai/protovoice:v0.12.1`, `:0.12`, `:latest`.
+- Docs: `https://protolabsai.github.io/protoVoice/` — pages rebuilt on every main push.
 
-### What v0.6.0 added (highlights)
-- **Langfuse tracing**: TurnTracer observer, session/trace skeleton, LLM + tool + manual spans, `langfuse.openai` drop-in for filler generations, cross-fleet header propagation.
-- **RTVI (server-side only)**: `RTVIProcessor` + `RTVIObserver` in the pipeline. Events stream over the WebRTC data channel — nothing consuming them yet.
-- **Inbound A2A streaming (F5)**: `/a2a` handles both `message/send` and `message/stream` (SSE).
-- **Inbound ReAct loop (F6)**: text agent now has access to `calculator`, `get_datetime`, `web_search`, `delegate_to`; bounded 3 iterations.
-- **Delivery polish**: NEXT_SILENCE fallback timer (muted-mic), WHEN_ASKED TTL.
-- **Client fix**: outbound A2A messages now carry `messageId` per spec.
+### Recent releases
+- **v0.12.1** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.1)) — greenfield rename `pinned_skill` → `allowed_skills: list[str]`. Filtered dropdown for non-admins; single-element list keeps the read-only-chip behavior. First test suite (`tests/`, 33 passing — unit + TestClient integration).
+- **v0.12.0** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.0)) — role-based access (`admin` vs `user`), `pinned_viz`, `POST /api/admin/skills`, per-skill `viz:` block with client auto-apply.
+- **v0.11.0** — API-key auth, Infisical/YAML roster, per-user skill/verbosity/delivery/tracer/filler state, session memory at `{SESSION_STORE_DIR}/{user_id}/{skill_slug}.txt`, Langfuse spans stamped with `user_id` + `session_id`.
 
-### What landed with the React migration (v0.7 track)
-- **E3** — orb state driven by RTVI events (UserStartedSpeaking / BotLlmStarted / BotStartedSpeaking / BotStoppedSpeaking); audio-envelope derivation remains as fallback
-- **E4** — `idle / listening / thinking / speaking` state chip (shadcn Badge, top-right)
-- **C11** — RTVI observer fully consumed via `@pipecat-ai/client-react` + `@pipecat-ai/small-webrtc-transport`
-- Plugin architecture: `plugins/{orb, orb-settings, status-chip, status-pill, voice-panel}` with a UI-slot registry (`stage`, `overlay-top`, `overlay-bottom`, `drawer-voice`, `drawer-orb`)
-- PWA — installable, app shell precached, `/api/*` + `/.well-known/*` excluded from service-worker interception
+### What's in the multi-tenant model today
+
+| Layer | Behavior |
+|:---|:---|
+| Auth | `X-API-Key` or `Authorization: Bearer`; roster from Infisical (primary) → `config/users.yaml` (fallback) → empty = single-user fallback (synthetic `default` user, runs as admin). |
+| Roles | `user` (default, constrained) vs `admin` (unconstrained, can edit other users via `POST /api/admin/skills`). |
+| Skill access | `allowed_skills: [a, b]` on a user entry filters `/api/skills` and 403s disallowed slugs on POST. Single-element list → read-only chip in UI. Omit for unconstrained. Admins ignore it. |
+| Orb viz | `skill.viz` (variant + palette + params) applies on skill switch; `user.pinned_viz` on the roster overrides. Non-admins don't see the Orb tab in the drawer. |
+| Per-user state | Skill, verbosity, delivery controller, tracer, filler state, session memory paths — all keyed by `user.id`. ContextVars carry `current_user_id` / `current_session_id` across async boundaries. |
+| Admin API | `POST /api/admin/skills` to set any user's mutable active skill. No runtime pin mutation API yet — edit the YAML + `POST /api/users/reload` for persistent access-list changes. |
 
 ### What's still deferred
-| ID | Item | Why deferred | Target |
-|---|---|---|---|
-| K25 | Prompt registry migration (Langfuse prompts) | Not load-bearing | v0.7+ |
-| F8 | JWT + JWKS on `/a2a/push` | Shared-secret fine for tailnet | when public-exposed |
-| H15 | Per-skill TTS backend | Stretch, not critical | v0.7+ |
-| G9 | Multi-tenant Phase 1 — auth + per-user state | **Landed in v0.11.0.** Phases 2 + 3 still deferred — see below. |
-| I16-I18 | Prometheus / HF Spaces / E2E tests | Observability + deploy polish | v0.7+ |
-| J19 | Confidence-aware prosody | Nice-to-have, needs router confidence surface | v0.7+ |
-| — | Transcript panel plugin | Cheap add — RTVI transcripts already flowing | v0.7+ |
-| — | Trace-chip plugin (Langfuse trace id link) | Lands when Langfuse env vars are wired | v0.7+ |
-| — | Per-user server-side preset storage | localStorage fine single-user; server-side blocked on G9 | v0.7+ |
 
-### Multi-tenant status (G9)
+| Item | Why deferred | Notes |
+|---|---|---|
+| Admin CRUD UI (add/edit/remove users from drawer) | Scope — YAML-edit-and-reload works today | Needs a writable roster backend + admin-only drawer tab |
+| Frontend API-key paste field + 401 handling | Single-user fallback keeps dev unblocked | Small lift; gate on when the tailnet installs multiple users |
+| True per-caller A2A inbound auth | Shared `A2A_AUTH_TOKEN` + `A2A_USER_ID` default works for the fleet | Land when A2A goes public-exposed |
+| `/a2a/push` target-user via per-session token | Same as above | |
+| `GH_PAT` secret on the repo | Prevents `prepare-release.yml` from auto-running on PR merge | Manual tag cut works today (commit → push → annotated tag → push tag); re-enable the workflow by adding the secret |
+| Prometheus / HF Spaces / E2E | Observability + deploy polish | v0.13+ |
+| Collectible orbs + MTX | Scope moved to a separate app | Not a protoVoice feature |
 
-**Phase 1 — shipped in v0.11.0.**
-- API-key auth on every `/api/*` route (`X-API-Key` or `Authorization: Bearer`), single-user fallback when the roster is empty.
-- User roster sources: Infisical (primary) → `config/users.yaml` (fallback).
-- Per-user skill / verbosity / delivery / tracer / filler state (no more singleton clobbering when two clients connect).
-- Session memory paths `{SESSION_STORE_DIR}/{user_id}/{skill_slug}.txt`; legacy files auto-migrate to the default user.
-- Langfuse spans stamped with `user_id` + `session_id` via ContextVars.
-- New endpoints: `GET /api/whoami`, `POST /api/users/reload`.
-- Docs: [Users & API Keys guide](./docs/guides/users.md), plus updated HTTP API / environment-variables / memory / delivery-policies / tracing pages.
+## Tests
 
-**Phase 2 — frontend (deferred).**
-- Drawer setting for API-key paste; stored in localStorage.
-- All `/api/*` fetches send `X-API-Key`.
-- `GET /api/whoami` on boot to display the user's name + detect 401 → prompt.
-- Pipecat client's `/api/offer` handshake gets the header too via `webrtcRequestParams.headers`.
+First suite landed in v0.12.1.
 
-**Phase 3 — A2A tightening (deferred).**
-- Per-caller A2A auth against the same users roster (each fleet agent holds its own key).
-- `/a2a/push` target-user resolution via per-session token instead of the current `A2A_USER_ID` env-global fallback.
-- `_A2A_CONTEXTS` namespacing by `(api_principal, context_id)`.
+```bash
+# From repo root:
+.venv/bin/python -m pytest              # 33 passing, ~3s
+```
+
+- `tests/test_users.py` — 17 unit tests for `auth/users.py`: `User.allows_skill()` truth table, YAML parsing edge cases (empty list, non-list, stripped/dropped entries, unknown role, malformed pinned_viz), `by_id` lookup, reload flow.
+- `tests/test_endpoints.py` — 16 FastAPI TestClient integration tests: `/api/whoami` shape, `/api/skills` filtering + `locked` flag, active-slug drift-to-first-allowed, POST permit/deny paths, admin-only `/api/admin/skills`.
+- `pyproject.toml` has `[tool.pytest.ini_options]` pointing at `tests/`; `audioop` DeprecationWarning filtered (pipecat imports it on Python 3.12).
+
+No CI runner wired yet — tests run locally. Adding a `pytest.yml` workflow is the obvious next step if multi-person collaboration picks up.
 
 ## Waiting on external
 
 ### Workstacean
-1. **F7 ava delegate flip** — code-complete on our side (messageId ✓, streaming ✓, auth ✓, trace headers ✓, spec-tolerant fallback to `status.message` when `artifacts` is empty ✓). Held at `type: openai` pending [protoWorkstacean#471](https://github.com/protoLabsAI/protoWorkstacean/issues/471): (a) `message/send` routes to protoBot instead of ava, (b) `message/stream` intermittently returns an upstream "Cannot POST /" 404 as the reply text. When both land, edit `config/delegates.yaml` and swap the commented a2a block for the openai one — nothing else needed.
-2. **Tracing contract implementation** — [`docs/reference/tracing-contract.md`](https://protolabsai.github.io/protoVoice/reference/tracing-contract/) defines `Langfuse-Trace-Id` / `Langfuse-Session-Id` / `Langfuse-Parent-Observation-Id`. They implement "continue, don't create" in their `/a2a` handler. Until they do, we attach the headers but traces don't stitch across the fleet.
+1. **F7 ava delegate flip** — code-complete on our side. Held at `type: openai` pending [protoWorkstacean#471](https://github.com/protoLabsAI/protoWorkstacean/issues/471): (a) `message/send` routes to protoBot instead of ava, (b) `message/stream` intermittently returns `Cannot POST /` 404. When resolved, edit `config/delegates.yaml`, swap the commented a2a block for the openai one.
+2. **Tracing contract implementation** — [`docs/reference/tracing-contract.md`](https://protolabsai.github.io/protoVoice/reference/tracing-contract/) defines `Langfuse-Trace-Id` / `Langfuse-Session-Id` / `Langfuse-Parent-Observation-Id`. Until they implement "continue, don't create" in their `/a2a` handler, headers attach but traces don't stitch across the fleet.
 
 ### Langfuse config
-Not wired yet (code fails open when `LANGFUSE_*` env is unset). When the Langfuse on the ava node is ready for us:
+Not wired yet — code fails open when `LANGFUSE_*` env is unset. When ready:
 ```
-LANGFUSE_HOST=http://ava:3000        # or the actual URL
+LANGFUSE_HOST=http://ava:3000
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```
-In `.env` (local) or the deployment env. No code changes needed.
+In `.env` or the deployment env. No code changes needed.
 
-## Web frontend reference (where things live)
+## Repo layout (quick reference)
 
-- `web/` — bun + Vite 6 + React 19 + shadcn/ui + Tailwind 4 + vite-plugin-pwa.
-- `web/src/voice/` — PipecatClient wiring, derived voice-state store (useSyncExternalStore), hooks (`useVoiceState`, `useVoiceStateSelector`, `useVoiceSession`, `useBotTurnEvents`, `useUserTurnEvents`).
-- `web/src/plugins/` — one directory per plugin. Each registers at module import via `registerPlugin({ id, slots })`. Add a plugin: drop a dir, export a component, side-effect-import from `App.tsx`.
-- `web/src/lib/api.ts` — typed fetches for `/api/{skills,verbosity,voice/clone}`.
-- `web/src/components/Drawer.tsx` — shadcn Sheet + Tabs hosting the voice/orb drawer panels.
-- `app.py` — `FRONTEND=auto|react|vanilla` env flag picks the shell. `auto` uses `web/dist/` when present, legacy `static/` otherwise.
-- `Dockerfile` — stage 1 builds `web/` via `oven/bun:1`; stage 2 copies `web/dist/` into the CUDA runtime image.
-- Dev: `cd web && bun run dev` + `sudo tailscale serve --bg --https=8443 http://127.0.0.1:5173` for tailnet-accessible HMR with full HTTPS (mic permission).
-
-## Tomorrow's main track — v0.7 polish + next features
-
-Easy vertical slices to land on top of the React frontend:
-- **Transcript panel plugin** — new `plugins/transcript/` that listens to `UserTranscript` + `BotTranscript` and renders in `overlay-bottom` or a new drawer tab. Cheap add — events already flowing.
-- **Trace-chip plugin** — show active Langfuse trace id (needs `LANGFUSE_*` env set on the deployed box). Open-in-Langfuse link.
-- **Code-split the bundle** — current 359 KB gz is under budget but `three` is ~130 KB gz of that; dynamic `import()` of the orb plugin shaves the initial shell.
-- **Remove legacy `static/`** once React has a few weeks in prod without rollback. Drop `FRONTEND=vanilla` handling at that point.
-
-## Quick-start commands
-
-```bash
-# Where we left off
-cd ~/dev/protoVoice
-git log --oneline -5
-git status
-
-# Current container
-docker compose ps
-docker compose logs --tail=20 protovoice
-
-# Health + smoke
-curl -sS https://protolabs.taild25506.ts.net/healthz | jq .
-curl -sS -X POST https://protolabs.taild25506.ts.net/a2a \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"t","method":"message/send",
-       "params":{"contextId":"c","message":{"messageId":"m","role":"user",
-       "parts":[{"kind":"text","text":"what time is it?"}]}}}'
-
-# Release info
-gh release view v0.6.0
-```
-
-## Context + gotchas
-
-- `_ACTIVE_TRACER` module-level registry pattern lets `a2a/client.py`, `agent/delegates.py`, etc. reach the live Langfuse trace without importing `app.py` (circular-import-safe).
-- Pipecat's `LLMContextSummarizer` is plumbed inside the assistant aggregator — no separate pipeline processor. Env knobs: `MEMORY_MAX_CONTEXT_TOKENS`, `MEMORY_MAX_MESSAGES`, `MEMORY_TARGET_CONTEXT_TOKENS`.
-- `ProsodyTextFilter` plugs into pipecat's TTS `text_filters=` kwarg (Kokoro + OpenAI); Fish passes tags through.
-- DeliveryController's watchdog is lazy: starts on first `deliver()`, exits when queue drains, re-arms on next enqueue.
-- `agent/tracing.py::_NullSpan` is the fail-open stand-in — every span-using call site works unmodified when Langfuse is off.
-- `cancel_on_interruption=True` is the default for sync tools; only `slow_research` is `False` (true async path).
-- In `agent/session_store.py`: `{SESSION_STORE_DIR}/{skill}.txt` holds the summary; `{skill}.pending.json` holds orphan deliveries.
+- `auth/` — UserRegistry, Infisical fetch, require_user / require_admin, ContextVars
+- `agent/` — per-user state, tracing, session_store, filler generator, delivery controller
+- `skills/` — YAML loader with `extends:` inheritance, models
+- `app.py` — FastAPI routes, RTVI wiring, Pipecat pipeline builder
+- `a2a/` — inbound + outbound A2A (JSON-RPC, `message/send` + `message/stream`)
+- `web/` — bun + Vite 6 + React 19 + shadcn/ui + Tailwind 4, PWA
+  - `src/voice/` — Pipecat client wiring + derived voice-state store
+  - `src/plugins/{orb,orb-settings,status-chip,status-pill,voice-panel}` — each registers via `registerPlugin({ id, slots })`
+  - `src/auth/` — whoami store + selectors (`isAdmin`, `isSkillLocked`, `isVizLocked`)
+  - `src/lib/api.ts` — typed fetches for `/api/*`
+- `config/skills/*.yaml` — skill catalog (`viz:` block per skill optional)
+- `config/users.yaml` — roster (with `allowed_skills`, `pinned_viz`, `role`); copy `users.example.yaml`
+- `tests/` — pytest suite (users + endpoints)
 
 ## Known tripwires (things NOT to change lightly)
 
-- **Don't touch getUserMedia constraints.** We tried disabling AGC/NS/EC — broke the server VAD's ability to detect speech. Browser defaults stay.
-- **Don't reintroduce a hand-rolled memory pruner.** Pipecat's `LLMContextSummarizer` is the right primitive — our `memory/window.py` is deleted for a reason.
+- **Don't touch getUserMedia constraints.** Disabling AGC/NS/EC breaks server VAD.
+- **Don't reintroduce a hand-rolled memory pruner.** Pipecat's `LLMContextSummarizer` is the right primitive.
 - **Don't remove `messageId`** from outbound A2A calls. Spec-required; workstacean enforces.
-- **Don't forget `uTime` + `orb.rotation` wrap** in the visualizer — GLSL float32 precision degrades after ~10 minutes; wrap at 2π·N keeps sin/cos clean.
+- **Don't forget `uTime` + `orb.rotation` wrap** — GLSL float32 precision degrades after ~10 min; wrap at 2π·N.
 - **Don't touch `append_to_context=False`** on filler / backchannel / delivery `TTSSpeakFrame`s — without it the LLM riffs on its own fillers.
+- **`DEFAULT_USER` is admin on purpose.** Single-user fallback keeps dev unconstrained; don't "fix" it to `user` without adding a way out.
 
-## One-line rollback, if needed
+## Quick-start
 
 ```bash
-git checkout v0.5.0     # previous known-good tag
-docker compose up -d --no-deps --force-recreate protovoice  # restart with v0.5.0 image if needed
+cd ~/dev/protoVoice
+git status && git log --oneline -5
+
+# Health + smoke
+curl -sS https://protolabs.taild25506.ts.net/healthz | jq .
+
+# Tests
+.venv/bin/python -m pytest
+
+# Release flow (manual — GH_PAT not set on repo)
+python3 scripts/version.py {patch|minor|major}
+git add pyproject.toml && git commit -m "chore: release v<x.y.z>"
+git tag -a v<x.y.z> -m "<annotation>" HEAD
+git push origin main && git push origin v<x.y.z>
+# → release.yml builds semver images + creates GH release
+# → docker-publish.yml refreshes :latest on main push
 ```
 
----
+## One-line rollback
 
-Tomorrow's first action: pick framework + RTVI client approach, scaffold `web/` dir, wire signalling against `/api/offer`.
+```bash
+git checkout v0.11.0    # last pre-roles tag
+docker compose up -d --no-deps --force-recreate protovoice
+```
