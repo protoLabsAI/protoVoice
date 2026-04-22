@@ -82,6 +82,7 @@ export default defineConfig({
             { text: "Natural-Sounding Fillers", link: "/explanation/natural-fillers" },
             { text: "Why Pipecat", link: "/explanation/why-pipecat" },
             { text: "Two-Model Split", link: "/explanation/two-model-split" },
+            { text: "Browser-First Inference (deferred)", link: "/explanation/browser-first-inference" },
           ],
         },
       ],
