@@ -8,6 +8,7 @@ import {
   usePipecatClientTransportState,
 } from '@pipecat-ai/client-react';
 import { useVoiceStateSelector } from '../../voice/hooks';
+import { useCoarsePointer } from '../../lib/useCoarsePointer';
 import type { VoiceState } from '../../voice/state';
 
 const BUILTIN_PALETTES = new Set(['Aurora', 'Ember', 'Citrus', 'Forest', 'Noir']);
@@ -31,11 +32,27 @@ export function OrbCanvas() {
   const botTrack = usePipecatClientMediaTrack('audio', 'bot');
   const localTrack = usePipecatClientMediaTrack('audio', 'local');
   const state: VoiceState = useVoiceStateSelector((s) => s.state);
+  const coarsePointer = useCoarsePointer();
 
-  const onDoubleClick = () => {
+  const tryConnect = () => {
     if (!client) return;
-    const disconnected = transport === 'disconnected' || transport === 'initialized' || transport === 'error';
-    if (disconnected) client.connect().catch((err) => console.error('[orb] connect error:', err));
+    const disconnected =
+      transport === 'disconnected' ||
+      transport === 'initialized' ||
+      transport === 'error';
+    if (disconnected) {
+      client.connect().catch((err) => console.error('[orb] connect error:', err));
+    }
+  };
+
+  // Touch devices: single-tap connects (double-tap often triggers browser
+  // zoom and feels wrong). Mouse: keep double-click so accidental clicks
+  // on the orb during drag-to-spin don't kick off a connection.
+  const onClick = () => {
+    if (coarsePointer) tryConnect();
+  };
+  const onDoubleClick = () => {
+    if (!coarsePointer) tryConnect();
   };
 
   // Instantiate once, clean up on unmount. StrictMode invokes the effect
@@ -89,12 +106,14 @@ export function OrbCanvas() {
   return (
     <div
       ref={hostRef}
+      onClick={onClick}
       onDoubleClick={onDoubleClick}
       style={{
         position: 'absolute',
         inset: 0,
         width: '100%',
         height: '100%',
+        touchAction: 'none',
       }}
     />
   );
