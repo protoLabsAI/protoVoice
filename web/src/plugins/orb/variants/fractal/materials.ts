@@ -1,10 +1,8 @@
 import * as THREE from 'three';
 import { shaderMaterial } from '@react-three/drei';
 import { extend } from '@react-three/fiber';
-import fractalVert from './shaders/fractal.vert.glsl';
+import fractalVert from '../../shared/shaders/sphere.vert.glsl';
 import fractalFrag from './shaders/fractal.frag.glsl';
-import atmosphereVert from './shaders/atmosphere.vert.glsl';
-import atmosphereFrag from './shaders/atmosphere.frag.glsl';
 
 /**
  * Fractal core material. Ray-marched volumetric fractal inside a
@@ -31,30 +29,11 @@ export const FractalMaterial = shaderMaterial(
   fractalFrag,
 );
 
-/**
- * Atmosphere shell material. Renders the halo ring around the fractal;
- * shared click bloom with the core material.
- */
-export const AtmosphereMaterial = shaderMaterial(
-  {
-    uColor: new THREE.Color('#0ea5e9'),
-    uColorSecondary: new THREE.Color('#f472b6'),
-    uGlow: 0.18,
-    uLevel: 1.0,
-    uClickDir: new THREE.Vector3(0, 0, 1),
-    uClickStrength: 0,
-  },
-  atmosphereVert,
-  atmosphereFrag,
-);
+extend({ FractalMaterial });
 
-extend({ FractalMaterial, AtmosphereMaterial });
-
-// JSX intrinsic type declarations. Lets us use <fractalMaterial ... /> in TSX.
+// JSX intrinsic type declaration.
 declare module '@react-three/fiber' {
-  // Augment r3f's ThreeElements so our custom classes appear as JSX tags.
   interface ThreeElements {
     fractalMaterial: import('@react-three/fiber').ThreeElements['shaderMaterial'];
-    atmosphereMaterial: import('@react-three/fiber').ThreeElements['shaderMaterial'];
   }
 }
