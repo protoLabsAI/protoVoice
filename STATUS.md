@@ -1,19 +1,20 @@
 # Status — pickup for next session
 
-Updated after v0.12.1. Branch: `main`.
+Updated after v0.12.2. Branch: `main`.
 
 ## TL;DR
 
-Multi-tenant Phase 1.5 shipped across v0.11.0 → v0.12.1: API-key auth, per-user state, role-based access (`admin` vs `user`), skill-access control via `allowed_skills`, per-user `pinned_viz`, and dedicated orb viz per skill. First test suite in the repo landed with v0.12.1 (33 tests, pytest). Running at `https://protolabs.taild25506.ts.net/`; containers at `ghcr.io/protolabsai/protovoice:v0.12.1` + `:latest`.
+Multi-tenant Phase 1.5 shipped across v0.11.0 → v0.12.1: API-key auth, per-user state, role-based access (`admin` vs `user`), skill-access control via `allowed_skills`, per-user `pinned_viz`, and dedicated orb viz per skill. First test suite landed in v0.12.1 (33 tests, pytest). v0.12.2 migrates the tracing module to the Langfuse v4 SDK and adds 16 tests pinning the call shapes (49 total). Running at `https://protolabs.taild25506.ts.net/`; containers at `ghcr.io/protolabsai/protovoice:v0.12.2` + `:latest`.
 
 ## Where we are
 
 ### Deployed
 - `https://protolabs.taild25506.ts.net/` (tailnet-only, ava Blackwell node, Fish S2-Pro TTS, Qwen 3.6-35B via host vLLM on `:8000`).
-- Docker images: `ghcr.io/protolabsai/protovoice:v0.12.1`, `:0.12`, `:latest`.
+- Docker images: `ghcr.io/protolabsai/protovoice:v0.12.2`, `:0.12`, `:latest`.
 - Docs: `https://protolabsai.github.io/protoVoice/` — pages rebuilt on every main push.
 
 ### Recent releases
+- **v0.12.2** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.2)) — Langfuse v2 → v4 SDK migration in `agent/tracing.py`. `client.trace()` / `trace.span()` / `trace.end()` → `start_observation(as_type=…)` + `update_trace()`. Public helper signatures unchanged; external callers untouched. Adds `tests/test_tracing.py` (16 tests, stubbed SDK). Closes #2.
 - **v0.12.1** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.1)) — greenfield rename `pinned_skill` → `allowed_skills: list[str]`. Filtered dropdown for non-admins; single-element list keeps the read-only-chip behavior. First test suite (`tests/`, 33 passing — unit + TestClient integration).
 - **v0.12.0** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.0)) — role-based access (`admin` vs `user`), `pinned_viz`, `POST /api/admin/skills`, per-skill `viz:` block with client auto-apply.
 - **v0.11.0** — API-key auth, Infisical/YAML roster, per-user skill/verbosity/delivery/tracer/filler state, session memory at `{SESSION_STORE_DIR}/{user_id}/{skill_slug}.txt`, Langfuse spans stamped with `user_id` + `session_id`.
@@ -43,15 +44,16 @@ Multi-tenant Phase 1.5 shipped across v0.11.0 → v0.12.1: API-key auth, per-use
 
 ## Tests
 
-First suite landed in v0.12.1.
+First suite landed in v0.12.1; tracing tests added in v0.12.2.
 
 ```bash
 # From repo root:
-.venv/bin/python -m pytest              # 33 passing, ~3s
+.venv/bin/python -m pytest              # 49 passing, ~3s
 ```
 
 - `tests/test_users.py` — 17 unit tests for `auth/users.py`: `User.allows_skill()` truth table, YAML parsing edge cases (empty list, non-list, stripped/dropped entries, unknown role, malformed pinned_viz), `by_id` lookup, reload flow.
 - `tests/test_endpoints.py` — 16 FastAPI TestClient integration tests: `/api/whoami` shape, `/api/skills` filtering + `locked` flag, active-slug drift-to-first-allowed, POST permit/deny paths, admin-only `/api/admin/skills`.
+- `tests/test_tracing.py` — 16 unit tests pinning Langfuse v4 call shapes: `start_turn_trace` → `client.start_observation(as_type="span")` + `root.update_trace(session_id=, user_id=)`, `continue_trace` → `TraceContext(trace_id=…)`, `TurnTracer` LLM + tool-span lifecycle, `tracing.span()` contextmanager, `propagation_headers` fallbacks, fail-open paths. Stubs `langfuse` via a fake module so the dep isn't needed in the test venv.
 - `pyproject.toml` has `[tool.pytest.ini_options]` pointing at `tests/`; `audioop` DeprecationWarning filtered (pipecat imports it on Python 3.12).
 
 No CI runner wired yet — tests run locally. Adding a `pytest.yml` workflow is the obvious next step if multi-person collaboration picks up.
@@ -63,13 +65,13 @@ No CI runner wired yet — tests run locally. Adding a `pytest.yml` workflow is 
 2. **Tracing contract implementation** — [`docs/reference/tracing-contract.md`](https://protolabsai.github.io/protoVoice/reference/tracing-contract/) defines `Langfuse-Trace-Id` / `Langfuse-Session-Id` / `Langfuse-Parent-Observation-Id`. Until they implement "continue, don't create" in their `/a2a` handler, headers attach but traces don't stitch across the fleet.
 
 ### Langfuse config
-Not wired yet — code fails open when `LANGFUSE_*` env is unset. When ready:
+Not wired yet — code fails open when `LANGFUSE_*` env is unset. SDK line is v4 as of v0.12.2 (pin: `langfuse>=4,<5`). When ready:
 ```
 LANGFUSE_HOST=http://ava:3000
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 ```
-In `.env` or the deployment env. No code changes needed.
+In `.env` or the deployment env. First voice-turn produces a root span `user_turn` with `llm.response` + optional `tool.*` sub-spans; session_id / user_id stamped via `update_trace`. Manual QA against the dashboard is the last acceptance item on #2.
 
 ## Repo layout (quick reference)
 
@@ -120,6 +122,6 @@ git push origin main && git push origin v<x.y.z>
 ## One-line rollback
 
 ```bash
-git checkout v0.11.0    # last pre-roles tag
+git checkout v0.12.1    # last pre-tracing-migration tag
 docker compose up -d --no-deps --force-recreate protovoice
 ```
