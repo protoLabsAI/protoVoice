@@ -199,10 +199,12 @@ def _patch_frame_types(tracing, monkeypatch):
 
     names = [
         "UserStoppedSpeakingFrame",
+        "BotStartedSpeakingFrame",
         "BotStoppedSpeakingFrame",
         "TranscriptionFrame",
         "LLMFullResponseStartFrame",
         "LLMFullResponseEndFrame",
+        "LLMTextFrame",
         "FunctionCallInProgressFrame",
         "FunctionCallResultFrame",
         "FunctionCallCancelFrame",
@@ -215,7 +217,7 @@ def _push(tracer, frame):
     asyncio.run(tracer.on_push_frame(types.SimpleNamespace(frame=frame)))
 
 
-def test_turn_tracer_opens_llm_span_on_response_start(tracing_enabled, monkeypatch):
+def test_turn_tracer_opens_llm_generation_on_response_start(tracing_enabled, monkeypatch):
     tracing, _, root, _ = tracing_enabled
     _patch_frame_types(tracing, monkeypatch)
 
@@ -227,8 +229,46 @@ def test_turn_tracer_opens_llm_span_on_response_start(tracing_enabled, monkeypat
     root.start_observation.assert_called_once()
     kwargs = root.start_observation.call_args.kwargs
     assert kwargs["name"] == "llm.response"
-    assert kwargs["as_type"] == "span"
+    assert kwargs["as_type"] == "generation"
     assert kwargs["input"] == "what time is it"
+
+
+def test_turn_tracer_stamps_completion_start_time_on_first_llm_text(tracing_enabled, monkeypatch):
+    tracing, _, root, _ = tracing_enabled
+    _patch_frame_types(tracing, monkeypatch)
+
+    llm_span = _fake_span("llm")
+    root.start_observation.return_value = llm_span
+
+    tracer = tracing.TurnTracer(session_id="sess-1", user_id="u1")
+    _push(tracer, _FakeFrame("UserStoppedSpeakingFrame"))
+    _push(tracer, _FakeFrame("LLMFullResponseStartFrame"))
+    _push(tracer, _FakeFrame("LLMTextFrame", text="Hello"))
+    # Subsequent tokens shouldn't re-stamp.
+    _push(tracer, _FakeFrame("LLMTextFrame", text=" world"))
+
+    # Exactly one update() call with completion_start_time kwarg.
+    ttft_calls = [
+        c for c in llm_span.update.call_args_list
+        if "completion_start_time" in c.kwargs
+    ]
+    assert len(ttft_calls) == 1
+
+
+def test_turn_tracer_emits_first_audio_event(tracing_enabled, monkeypatch):
+    tracing, _, root, _ = tracing_enabled
+    _patch_frame_types(tracing, monkeypatch)
+
+    tracer = tracing.TurnTracer(session_id="sess-1", user_id="u1")
+    _push(tracer, _FakeFrame("UserStoppedSpeakingFrame"))
+    _push(tracer, _FakeFrame("BotStartedSpeakingFrame"))
+    # Repeat BotStartedSpeakingFrame shouldn't double-emit.
+    _push(tracer, _FakeFrame("BotStartedSpeakingFrame"))
+
+    assert root.create_event.call_count == 1
+    kwargs = root.create_event.call_args.kwargs
+    assert kwargs["name"] == "tts.first_audio"
+    assert "at" in kwargs["metadata"]
 
 
 def test_turn_tracer_opens_and_closes_tool_span(tracing_enabled, monkeypatch):

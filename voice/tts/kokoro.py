@@ -62,11 +62,13 @@ class LocalKokoroTTS(TTSService):
         if not text.strip():
             return
         from agent import tracing
-        tts_span = tracing.active_trace().span(
+        tts_span = tracing.active_trace().start_observation(
             name="tts.kokoro",
+            as_type="span",
             input={"text_len": len(text), "preview": text[:120]},
             metadata={"backend": "kokoro", "voice": self._voice},
         )
+        tracing.stamp_current_context(tts_span)
         try:
             await self.start_tts_usage_metrics(text)
             pipe = _get_pipe(self._lang)

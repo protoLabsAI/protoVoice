@@ -526,14 +526,19 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         if skill_llm.get("api_key_env")
         else LLM_API_KEY
     )
-    # vLLM-specific extras. Only inject when hitting the default (local)
-    # endpoint; non-vLLM gateways (LiteLLM, OpenAI, Anthropic) either
-    # ignore or reject `chat_template_kwargs`. Skills can override via
-    # skill.llm.extra_body.
+    # Thinking/reasoning models (Qwen3, DeepSeek-R1, etc.) emit a
+    # <think>...</think> scratchpad before the user-visible reply. In a
+    # voice product that means dead air — no sentence break fires in
+    # reasoning tokens so TTS can't start streaming until the model
+    # finally transitions to the answer. Default `enable_thinking=False`
+    # so the model skips that phase entirely.
+    #
+    # `chat_template_kwargs` rides inside OpenAI's `extra_body`. LiteLLM
+    # forwards it to vLLM verbatim; OpenAI/Anthropic/Gemini gateways
+    # ignore unknown fields. Skills that need thinking on (or a different
+    # extra-body shape) override via `skill.llm.extra_body`.
     if "extra_body" in skill_llm:
         extra_body = skill_llm["extra_body"] or None
-    elif using_custom_llm:
-        extra_body = None
     else:
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
 
