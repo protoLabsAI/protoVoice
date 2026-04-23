@@ -1316,9 +1316,15 @@ register_a2a_routes(
 # a hard reload. Registered LAST; earlier routes win. Skips /api, /.well-known,
 # /static, and anything with a file extension (lets 404s propagate cleanly
 # for missing assets instead of shadowing them with HTML).
+#
+# Exception: `/index.html` is the Vite PWA app-shell URL — workbox precaches
+# it during service-worker install, so it must resolve or the SW install
+# aborts with `bad-precaching-response`.
 if _serve_react():
     @app.get("/{path:path}")
     async def spa_fallback(path: str):
+        if path == "index.html":
+            return FileResponse(str(WEB_DIST / "index.html"))
         if (
             path.startswith("api/")
             or path.startswith(".well-known/")
