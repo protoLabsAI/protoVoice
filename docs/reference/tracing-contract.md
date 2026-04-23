@@ -12,7 +12,7 @@ On every outbound request to another agent, protoVoice attaches two headers:
 | `Langfuse-Trace-Id` | yes | 32-char hex | The current user-turn trace ID |
 | `Langfuse-Parent-Observation-Id` | optional | 32-char hex | If present, the caller wants your spans nested under this specific observation (span) instead of directly under the trace. |
 
-Receivers **must** honor them: instead of creating a fresh trace, continue the caller's trace with `langfuse.trace(id=trace_id, session_id=session_id)`. All spans you open for this request then nest inside the caller's trace.
+Receivers **must** honor them: instead of creating a fresh trace, open a new root span attached to the caller's trace via `langfuse.start_observation(as_type="span", trace_context=TraceContext(trace_id=trace_id))` (Langfuse v4 SDK) and set `session_id` via `root.update_trace(session_id=session_id)`. All spans you open for this request then nest inside the caller's trace.
 
 If the headers are absent, treat the call as an independent trace — normal Langfuse behaviour.
 
@@ -40,13 +40,26 @@ parent_id = request.headers.get("Langfuse-Parent-Observation-Id")
 ### 2. Continue, don't create
 
 ```python
+from langfuse import Langfuse
+from langfuse.types import TraceContext
+
+langfuse = Langfuse(...)
+
 if trace_id and session_id:
-    trace = langfuse.trace(id=trace_id, session_id=session_id)
+    # Re-attach: a new root span linked to the caller's existing trace.
+    root = langfuse.start_observation(
+        name="ava.handle_request",
+        as_type="span",
+        trace_context=TraceContext(trace_id=trace_id),
+    )
+    root.update_trace(session_id=session_id)
     # New spans for this request nest under the caller's trace:
-    span = trace.span(name="ava.handle_request", parent_observation_id=parent_id)
+    child = root.start_observation(name="ava.handle_request.llm", as_type="generation")
 else:
-    trace = langfuse.trace(name="ava.standalone_request")
+    root = langfuse.start_observation(name="ava.standalone_request", as_type="span")
 ```
+
+If `Langfuse-Parent-Observation-Id` is present, pass it in `TraceContext(trace_id=trace_id, parent_span_id=parent_id)` so your spans nest under that specific observation instead of at the trace root.
 
 ### 3. Propagate
 
@@ -69,6 +82,8 @@ Don't log the full header values in high-volume places — they're noisy but oth
 ## Versioning
 
 This contract is v1. Future changes (e.g. W3C traceparent interop) bump the version via an additional `Langfuse-Contract-Version: 2` header; receivers fall back to v1 behaviour when unset.
+
+protoVoice is on the Langfuse v4 Python SDK. The header contract itself is SDK-agnostic — receivers on v2 or v3 can still read `Langfuse-Trace-Id` / `Langfuse-Session-Id` and attach spans via whatever API their SDK offers — but the "Continue, don't create" example above is written against v4.
 
 ## Implementation status
 

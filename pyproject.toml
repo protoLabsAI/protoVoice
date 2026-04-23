@@ -24,7 +24,7 @@ dependencies = [
     "pyyaml",
     "ddgs",
     # Observability
-    "langfuse>=3.0",
+    "langfuse>=4,<5",
 ]
 
 [project.optional-dependencies]

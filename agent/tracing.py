@@ -6,12 +6,16 @@ Langfuse session; each user turn creates a trace spanning STT → LLM →
 same prefixes that appear in our log lines so grep-and-Langfuse stay
 grep-correlatable.
 
+SDK: Langfuse v4 (OpenTelemetry-style). The "trace" is just a root
+`span` in v4 — we keep the variable name `trace` in helpers to match
+the conceptual unit, but every handle is a span under the hood.
+
 Cross-fleet propagation: every outbound call to another agent carries
 the current trace's `session_id` + `trace_id` via headers
 (`Langfuse-Session-Id`, `Langfuse-Trace-Id`). Receiving agents adopt
-those values when constructing their own spans; traces stitch together
-across the protoLabs fleet rather than ending at our service boundary.
-See `docs/reference/tracing-contract.md`.
+those values via `continue_trace(trace_id=…)` when constructing their
+own spans; traces stitch together across the protoLabs fleet rather
+than ending at our service boundary. See `docs/reference/tracing-contract.md`.
 
 Fail-open: if LANGFUSE_* env vars are unset, every helper here is a
 no-op. Local dev without Langfuse keeps working; production gets full
@@ -66,20 +70,18 @@ def enabled() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Session / trace helpers — all no-op when disabled
+# Null span — returned when tracing is off, so callers can use
+# `span.update(...)` / `span.end(...)` / `span.start_observation(...)` without
+# `if enabled` guards everywhere.
 # ---------------------------------------------------------------------------
 
 class _NullSpan:
-    """Stand-in object returned when tracing is off, so callers can use
-    `with trace.span(...)` / `span.update(...)` / `span.end(...)` without
-    `if enabled` guards everywhere."""
     def __enter__(self): return self
     def __exit__(self, *_): return False
     def update(self, **_kwargs): return self
+    def update_trace(self, **_kwargs): return self
     def end(self, **_kwargs): return None
-    def score(self, *_args, **_kwargs): return None
-    def span(self, *_args, **_kwargs): return _NullSpan()
-    def generation(self, *_args, **_kwargs): return _NullSpan()
+    def start_observation(self, *_args, **_kwargs): return _NULL
     @property
     def id(self) -> str: return ""
     @property
@@ -87,6 +89,11 @@ class _NullSpan:
 
 
 _NULL = _NullSpan()
+
+
+# ---------------------------------------------------------------------------
+# Session / trace helpers — all no-op when disabled
+# ---------------------------------------------------------------------------
 
 
 def start_session(session_id: str, *, user_id: str | None = None) -> None:
@@ -105,23 +112,31 @@ def start_turn_trace(
     user_id: str | None = None,
     metadata: dict | None = None,
 ) -> Any:
-    """Open a new trace for a single user turn. Returns a trace handle
+    """Open a new trace for a single user turn. Returns the root span
     (or a NullSpan when disabled). Caller is responsible for calling
-    `.update(output=…)` and `.end()` when the turn completes."""
+    `.update(output=…)` and `.end()` when the turn completes.
+
+    In v4, the "trace" is the root span — trace-level attrs (session_id,
+    user_id) are set via `span.update_trace(...)` after creation.
+    """
     client = _lazy_client()
     if client is None:
         return _NULL
     try:
-        return client.trace(
+        root = client.start_observation(
             name=name,
-            session_id=session_id,
-            user_id=user_id,
+            as_type="span",
             input=input,
             metadata=metadata or {},
         )
     except Exception as e:
-        logger.warning(f"[tracing] trace() failed: {e}")
+        logger.warning(f"[tracing] start_observation() failed: {e}")
         return _NULL
+    try:
+        root.update_trace(session_id=session_id, user_id=user_id)
+    except Exception as e:
+        logger.warning(f"[tracing] update_trace() failed: {e}")
+    return root
 
 
 def continue_trace(
@@ -131,15 +146,34 @@ def continue_trace(
 ) -> Any:
     """Re-attach to a trace started elsewhere — used when we receive a
     cross-fleet call with Langfuse-Trace-Id / Langfuse-Session-Id headers
-    and want our spans to nest inside the caller's trace."""
+    and want our spans to nest inside the caller's trace.
+
+    v4 has no direct `trace(id=…)` equivalent; we open a new root span
+    with `trace_context=TraceContext(trace_id=…)` so the span attaches to
+    the caller's trace rather than starting a new one.
+    """
     client = _lazy_client()
     if client is None:
         return _NULL
     try:
-        return client.trace(id=trace_id, session_id=session_id)
+        from langfuse.types import TraceContext  # type: ignore[import-not-found]
+    except Exception as e:
+        logger.warning(f"[tracing] langfuse.types import failed: {e}")
+        return _NULL
+    try:
+        root = client.start_observation(
+            name="continued_turn",
+            as_type="span",
+            trace_context=TraceContext(trace_id=trace_id),
+        )
     except Exception as e:
         logger.warning(f"[tracing] continue_trace() failed: {e}")
         return _NULL
+    try:
+        root.update_trace(session_id=session_id)
+    except Exception as e:
+        logger.warning(f"[tracing] update_trace() failed: {e}")
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -224,8 +258,9 @@ class TurnTracer:
         elif isinstance(frame, F["LLMFullResponseStartFrame"]):
             if self._current_trace is not None and self._llm_span is None:
                 try:
-                    self._llm_span = self._current_trace.span(
+                    self._llm_span = self._current_trace.start_observation(
                         name="llm.response",
+                        as_type="span",
                         input=self._last_transcript,
                     )
                 except Exception as e:
@@ -246,8 +281,9 @@ class TurnTracer:
             name = getattr(frame, "function_name", None) or getattr(frame, "name", "tool")
             if call_id and self._current_trace is not None:
                 try:
-                    self._tool_spans[call_id] = self._current_trace.span(
+                    self._tool_spans[call_id] = self._current_trace.start_observation(
                         name=f"tool.{name}",
+                        as_type="span",
                         input={"name": name, "args_preview": _preview(getattr(frame, "arguments", None))},
                     )
                 except Exception as e:
@@ -258,7 +294,8 @@ class TurnTracer:
             span = self._tool_spans.pop(call_id, None)
             if span is not None:
                 try:
-                    span.end(output=_preview(getattr(frame, "result", None)))
+                    span.update(output=_preview(getattr(frame, "result", None)))
+                    span.end()
                 except Exception as e:
                     logger.warning(f"[tracing] tool span end failed: {e}")
 
@@ -344,11 +381,16 @@ def propagation_headers(
     """Return the Langfuse-* HTTP headers that carry the current trace
     across fleet boundaries. Empty dict if tracing is off or there's no
     live trace. See docs/reference/tracing-contract.md for the spec.
+
+    In v4, the session_id is a trace-level attribute and isn't exposed
+    on the span handle — we source it from the `current_session_id`
+    ContextVar, set at session-entry time.
     """
     if not enabled() or trace is None:
         return {}
-    trace_id = getattr(trace, "id", "") or getattr(trace, "trace_id", "")
-    session_id = getattr(trace, "session_id", "") or ""
+    trace_id = getattr(trace, "trace_id", "") or getattr(trace, "id", "")
+    from auth.context import current_session_id
+    session_id = current_session_id.get() or ""
     if not (trace_id and session_id):
         return {}
     headers = {
@@ -431,7 +473,9 @@ def span(name: str, **span_kwargs: Any):
     sid = current_session_id.get()
     if sid:
         metadata.setdefault("session_id", sid)
-    sp = active_trace().span(name=name, metadata=metadata, **span_kwargs)
+    sp = active_trace().start_observation(
+        name=name, as_type="span", metadata=metadata, **span_kwargs
+    )
     try:
         yield sp
     finally:
