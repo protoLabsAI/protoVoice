@@ -31,9 +31,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_ENABLED = all(
-    os.environ.get(k, "").strip()
-    for k in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+def _base_url() -> str:
+    """Langfuse host URL. `LANGFUSE_BASE_URL` is the SDK's canonical env name;
+    `LANGFUSE_HOST` is accepted as a fallback for pre-v0.12.3 deployments."""
+    return (os.environ.get("LANGFUSE_BASE_URL") or os.environ.get("LANGFUSE_HOST") or "").strip()
+
+
+_ENABLED = bool(
+    _base_url()
+    and os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()
+    and os.environ.get("LANGFUSE_SECRET_KEY", "").strip()
 )
 _CLIENT: Any = None
 
@@ -55,13 +62,41 @@ def _lazy_client() -> Any:
         _CLIENT = Langfuse(
             public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-            host=os.environ["LANGFUSE_HOST"],
+            base_url=_base_url(),
         )
-        logger.info(f"[tracing] langfuse client ready → {os.environ['LANGFUSE_HOST']}")
+        logger.info(f"[tracing] langfuse client ready → {_base_url()}")
         return _CLIENT
     except Exception as e:
         logger.warning(f"[tracing] langfuse init failed, disabling: {e}")
         return None
+
+
+def _stamp_trace_attrs(span: Any, *, session_id: str | None, user_id: str | None) -> None:
+    """Tag the underlying OTEL span with `TRACE_SESSION_ID` / `TRACE_USER_ID`.
+
+    In Langfuse v4.5 the session_id and user_id are trace-level OTEL
+    attributes resolved at span-creation time. `propagate_attributes(...)`
+    is the recommended API but only affects spans created inside an active
+    context — which breaks when span creation is split across pipecat's
+    observer callbacks (different asyncio tasks). Stamping the attrs
+    directly on `span._otel_span` sidesteps context propagation entirely.
+
+    Safe on `_NullSpan` (no-op) and on any span where `_otel_span` is
+    missing or broken.
+    """
+    if not (session_id or user_id):
+        return
+    otel = getattr(span, "_otel_span", None)
+    if otel is None:
+        return
+    try:
+        from langfuse import LangfuseOtelSpanAttributes as A  # type: ignore[import-not-found]
+        if session_id:
+            otel.set_attribute(A.TRACE_SESSION_ID, session_id)
+        if user_id:
+            otel.set_attribute(A.TRACE_USER_ID, user_id)
+    except Exception as e:
+        logger.debug(f"[tracing] stamp_trace_attrs failed: {e}")
 
 
 def enabled() -> bool:
@@ -79,9 +114,9 @@ class _NullSpan:
     def __enter__(self): return self
     def __exit__(self, *_): return False
     def update(self, **_kwargs): return self
-    def update_trace(self, **_kwargs): return self
     def end(self, **_kwargs): return None
     def start_observation(self, *_args, **_kwargs): return _NULL
+    _otel_span = None  # so _stamp_trace_attrs(_NULL) is a no-op
     @property
     def id(self) -> str: return ""
     @property
@@ -132,10 +167,7 @@ def start_turn_trace(
     except Exception as e:
         logger.warning(f"[tracing] start_observation() failed: {e}")
         return _NULL
-    try:
-        root.update_trace(session_id=session_id, user_id=user_id)
-    except Exception as e:
-        logger.warning(f"[tracing] update_trace() failed: {e}")
+    _stamp_trace_attrs(root, session_id=session_id, user_id=user_id)
     return root
 
 
@@ -169,10 +201,7 @@ def continue_trace(
     except Exception as e:
         logger.warning(f"[tracing] continue_trace() failed: {e}")
         return _NULL
-    try:
-        root.update_trace(session_id=session_id)
-    except Exception as e:
-        logger.warning(f"[tracing] update_trace() failed: {e}")
+    _stamp_trace_attrs(root, session_id=session_id, user_id=None)
     return root
 
 
@@ -263,6 +292,7 @@ class TurnTracer:
                         as_type="span",
                         input=self._last_transcript,
                     )
+                    _stamp_trace_attrs(self._llm_span, session_id=self.session_id, user_id=self.user_id)
                 except Exception as e:
                     logger.warning(f"[tracing] llm span open failed: {e}")
 
@@ -281,11 +311,13 @@ class TurnTracer:
             name = getattr(frame, "function_name", None) or getattr(frame, "name", "tool")
             if call_id and self._current_trace is not None:
                 try:
-                    self._tool_spans[call_id] = self._current_trace.start_observation(
+                    sp = self._current_trace.start_observation(
                         name=f"tool.{name}",
                         as_type="span",
                         input={"name": name, "args_preview": _preview(getattr(frame, "arguments", None))},
                     )
+                    _stamp_trace_attrs(sp, session_id=self.session_id, user_id=self.user_id)
+                    self._tool_spans[call_id] = sp
                 except Exception as e:
                     logger.warning(f"[tracing] tool span open failed: {e}")
 
@@ -468,14 +500,16 @@ def span(name: str, **span_kwargs: Any):
     `if enabled()` guard.
     """
     from auth.context import current_session_id
-    metadata = dict(span_kwargs.pop("metadata", {}) or {})
-    metadata.setdefault("user_id", current_user_id.get())
+    uid = current_user_id.get()
     sid = current_session_id.get()
+    metadata = dict(span_kwargs.pop("metadata", {}) or {})
+    metadata.setdefault("user_id", uid)
     if sid:
         metadata.setdefault("session_id", sid)
     sp = active_trace().start_observation(
         name=name, as_type="span", metadata=metadata, **span_kwargs
     )
+    _stamp_trace_attrs(sp, session_id=sid, user_id=uid)
     try:
         yield sp
     finally:

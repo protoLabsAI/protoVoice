@@ -12,7 +12,7 @@ On every outbound request to another agent, protoVoice attaches two headers:
 | `Langfuse-Trace-Id` | yes | 32-char hex | The current user-turn trace ID |
 | `Langfuse-Parent-Observation-Id` | optional | 32-char hex | If present, the caller wants your spans nested under this specific observation (span) instead of directly under the trace. |
 
-Receivers **must** honor them: instead of creating a fresh trace, open a new root span attached to the caller's trace via `langfuse.start_observation(as_type="span", trace_context=TraceContext(trace_id=trace_id))` (Langfuse v4 SDK) and set `session_id` via `root.update_trace(session_id=session_id)`. All spans you open for this request then nest inside the caller's trace.
+Receivers **must** honor them: instead of creating a fresh trace, open a new root span attached to the caller's trace via `langfuse.start_observation(as_type="span", trace_context=TraceContext(trace_id=trace_id))` (Langfuse v4 SDK) and tag it with the session via `span._otel_span.set_attribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, session_id)`. All spans you open for this request then nest inside the caller's trace.
 
 If the headers are absent, treat the call as an independent trace — normal Langfuse behaviour.
 
@@ -40,26 +40,33 @@ parent_id = request.headers.get("Langfuse-Parent-Observation-Id")
 ### 2. Continue, don't create
 
 ```python
-from langfuse import Langfuse
+from langfuse import Langfuse, LangfuseOtelSpanAttributes as A
 from langfuse.types import TraceContext
 
 langfuse = Langfuse(...)
+
+def _stamp(span, *, session_id=None, user_id=None):
+    """Tag the OTEL span with trace-level session/user so Langfuse aggregations work."""
+    if session_id: span._otel_span.set_attribute(A.TRACE_SESSION_ID, session_id)
+    if user_id:    span._otel_span.set_attribute(A.TRACE_USER_ID, user_id)
 
 if trace_id and session_id:
     # Re-attach: a new root span linked to the caller's existing trace.
     root = langfuse.start_observation(
         name="ava.handle_request",
         as_type="span",
-        trace_context=TraceContext(trace_id=trace_id),
+        trace_context=TraceContext(trace_id=trace_id, parent_span_id=parent_id),
     )
-    root.update_trace(session_id=session_id)
-    # New spans for this request nest under the caller's trace:
+    _stamp(root, session_id=session_id)
+    # New spans for this request nest under the caller's trace; stamp each
+    # so aggregations by session_id include them too.
     child = root.start_observation(name="ava.handle_request.llm", as_type="generation")
+    _stamp(child, session_id=session_id)
 else:
     root = langfuse.start_observation(name="ava.standalone_request", as_type="span")
 ```
 
-If `Langfuse-Parent-Observation-Id` is present, pass it in `TraceContext(trace_id=trace_id, parent_span_id=parent_id)` so your spans nest under that specific observation instead of at the trace root.
+Why the direct `_otel_span.set_attribute(...)` instead of Langfuse's `propagate_attributes(...)` context manager: `propagate_attributes` only tags spans created inside an active context. If your receiver creates child spans across async task boundaries (observer callbacks, background workers), the OTEL context doesn't follow automatically — stamping each span at creation time is robust regardless.
 
 ### 3. Propagate
 

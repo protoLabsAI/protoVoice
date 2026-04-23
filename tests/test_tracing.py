@@ -22,19 +22,26 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
+def _fake_span(name):
+    """A fake Langfuse span with a settable _otel_span for stamp assertions."""
+    sp = MagicMock(name=name)
+    sp.id = f"obs_{name}"
+    sp.trace_id = "trace_xyz"
+    otel = MagicMock(name=f"otel_{name}")
+    otel._attrs = {}
+    def _set(k, v, otel=otel): otel._attrs[k] = v
+    otel.set_attribute.side_effect = _set
+    sp._otel_span = otel
+    return sp
+
+
 @pytest.fixture
 def tracing_enabled(monkeypatch):
     """Install a fake langfuse module + env vars, reload agent.tracing, yield
-    (module, fake_client, fake_root). The fake_client is what Langfuse()
-    returns; fake_root is what start_observation() returns."""
-    fake_root = MagicMock(name="root_span")
-    fake_root.id = "obs_abc"
-    fake_root.trace_id = "trace_xyz"
-
-    fake_nested = MagicMock(name="nested_span")
-    fake_nested.id = "obs_nested"
-    fake_nested.trace_id = "trace_xyz"
-    fake_root.start_observation.return_value = fake_nested
+    (module, fake_client, fake_root, TraceContext). fake_client is what
+    Langfuse() returns; fake_root is what start_observation() returns."""
+    fake_root = _fake_span("root")
+    fake_root.start_observation.return_value = _fake_span("nested")
 
     fake_client = MagicMock(name="langfuse_client")
     fake_client.start_observation.return_value = fake_root
@@ -47,16 +54,22 @@ def tracing_enabled(monkeypatch):
             self.trace_id = trace_id
             self.parent_span_id = parent_span_id
 
+    class _Attrs:
+        TRACE_SESSION_ID = "langfuse.session.id"
+        TRACE_USER_ID = "user.id"
+
     fake_types = types.ModuleType("langfuse.types")
     fake_types.TraceContext = _TraceContext
     fake_module.types = fake_types
+    fake_module.LangfuseOtelSpanAttributes = _Attrs
 
     monkeypatch.setitem(sys.modules, "langfuse", fake_module)
     monkeypatch.setitem(sys.modules, "langfuse.types", fake_types)
 
-    monkeypatch.setenv("LANGFUSE_HOST", "http://fake")
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "http://fake")
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
 
     # Reload so the module-level `_ENABLED` reads our patched env.
     if "agent.tracing" in sys.modules:
@@ -71,7 +84,7 @@ def tracing_enabled(monkeypatch):
 @pytest.fixture
 def tracing_disabled(monkeypatch):
     """LANGFUSE_* env unset → module fails open, every helper is a no-op."""
-    for k in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+    for k in ("LANGFUSE_BASE_URL", "LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
         monkeypatch.delenv(k, raising=False)
 
     if "agent.tracing" in sys.modules:
@@ -122,15 +135,14 @@ def test_start_turn_trace_calls_start_observation_with_span_type(tracing_enabled
     assert handle is root
 
 
-def test_start_turn_trace_sets_trace_level_attrs(tracing_enabled):
+def test_start_turn_trace_stamps_session_and_user_as_otel_attrs(tracing_enabled):
     tracing, _, root, _ = tracing_enabled
 
     tracing.start_turn_trace(session_id="sess-1", user_id="u1", input="hi")
 
-    root.update_trace.assert_called_once()
-    kwargs = root.update_trace.call_args.kwargs
-    assert kwargs["session_id"] == "sess-1"
-    assert kwargs["user_id"] == "u1"
+    attrs = root._otel_span._attrs
+    assert attrs["langfuse.session.id"] == "sess-1"
+    assert attrs["user.id"] == "u1"
 
 
 def test_start_turn_trace_returns_null_when_disabled(tracing_disabled):
@@ -154,7 +166,7 @@ def test_continue_trace_uses_trace_context(tracing_enabled):
     tc = kwargs["trace_context"]
     assert isinstance(tc, TraceContext)
     assert tc.trace_id == "trace_xyz"
-    root.update_trace.assert_called_once_with(session_id="sess-2")
+    assert root._otel_span._attrs["langfuse.session.id"] == "sess-2"
     assert handle is root
 
 
