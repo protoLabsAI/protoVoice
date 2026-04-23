@@ -1,20 +1,21 @@
 # Status — pickup for next session
 
-Updated after v0.12.3. Branch: `main`.
+Updated after v0.12.4. Branch: `main`.
 
 ## TL;DR
 
-Multi-tenant Phase 1.5 shipped across v0.11.0 → v0.12.1: API-key auth, per-user state, role-based access (`admin` vs `user`), skill-access control via `allowed_skills`, per-user `pinned_viz`, and dedicated orb viz per skill. First test suite landed in v0.12.1 (33 tests, pytest). v0.12.2 migrated the tracing module to the Langfuse v4 SDK; v0.12.3 corrected the trace-level attr API (direct OTEL stamping, not the nonexistent `update_trace()`) and verified end-to-end against `langfuse.proto-labs.ai`. 49 tests total. Running at `https://protolabs.taild25506.ts.net/`; containers at `ghcr.io/protolabsai/protovoice:v0.12.3` + `:latest`.
+Multi-tenant Phase 1.5 shipped across v0.11.0 → v0.12.1: API-key auth, per-user state, role-based access (`admin` vs `user`), skill-access control via `allowed_skills`, per-user `pinned_viz`, and dedicated orb viz per skill. First test suite landed in v0.12.1. v0.12.2 migrated tracing to Langfuse v4 SDK; v0.12.3 corrected the trace-level attr API. v0.12.4 fixed voice turns crashing (BaseObserver init chain + TTS backends still on v2 tracing API) and bundled ORBIS#3-style observability (TTFT on the LLM generation span, `tts.first_audio` event, `enable_thinking=False` default). 51 tests total. Running at `https://protolabs.taild25506.ts.net/`; containers at `ghcr.io/protolabsai/protovoice:v0.12.4` + `:latest`.
 
 ## Where we are
 
 ### Deployed
 - `https://protolabs.taild25506.ts.net/` (tailnet-only, ava Blackwell node, Fish S2-Pro TTS, Qwen 3.6-35B via host vLLM on `:8000`).
-- Docker images: `ghcr.io/protolabsai/protovoice:v0.12.3`, `:0.12`, `:latest`.
+- Docker images: `ghcr.io/protolabsai/protovoice:v0.12.4`, `:0.12`, `:latest`.
 - Docs: `https://protolabsai.github.io/protoVoice/` — pages rebuilt on every main push.
 
 ### Recent releases
-- **v0.12.3** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.3)) — Langfuse v4.5 API correction: v0.12.2's `span.update_trace()` calls were a no-op (method doesn't exist in langfuse 4.5). Switched to direct OTEL-attribute stamping via `_stamp_trace_attrs(span, session_id=, user_id=)`. Also reads `LANGFUSE_BASE_URL` as the canonical env name (with `LANGFUSE_HOST` fallback). E2E verified: smoke trace appears in `langfuse.proto-labs.ai` with correct session/user/input/output.
+- **v0.12.4** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.4)) — voice turns were crashing with `AttributeError: '_ActiveTracer' has no attribute '_name'`. Two causes fixed together: (1) `TurnTracer.__init__` wasn't calling `super().__init__()` so `BaseObserver` never set `_name`; (2) `voice/tts/fish.py` and `voice/tts/kokoro.py` still called the v2-era `active_trace().span(...)` API, which blew up on every voice turn and got masked by (1). Bundled ORBIS#3-style observability: LLM span is now a `GENERATION` with `completion_start_time` stamped on first `LLMTextFrame` (time-to-first-token visible in the trace); `tts.first_audio` event fires on first `BotStartedSpeakingFrame`; `enable_thinking=False` is now the default on every LLM path (was previously only the local-vLLM path — remote gateways were leaving Qwen3's `<think>` scratchpad on, eating the TTFT budget). Adds `tracing.stamp_current_context(span)` helper for call sites outside TurnTracer.
+- **v0.12.3** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.3)) — Langfuse v4.5 API correction: v0.12.2's `span.update_trace()` calls were a no-op (method doesn't exist in langfuse 4.5). Switched to direct OTEL-attribute stamping via `_stamp_trace_attrs(span, session_id=, user_id=)`. Also reads `LANGFUSE_BASE_URL` as the canonical env name (with `LANGFUSE_HOST` fallback).
 - **v0.12.2** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.2)) — Langfuse v2 → v4 SDK migration in `agent/tracing.py`. `client.trace()` / `trace.span()` / `trace.end()` → `start_observation(as_type=…)`. Public helper signatures unchanged; external callers untouched. Adds `tests/test_tracing.py` (16 tests, stubbed SDK). (Superseded by v0.12.3 for the trace-level attrs fix.)
 - **v0.12.1** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.1)) — greenfield rename `pinned_skill` → `allowed_skills: list[str]`. Filtered dropdown for non-admins; single-element list keeps the read-only-chip behavior. First test suite (`tests/`, 33 passing — unit + TestClient integration).
 - **v0.12.0** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.0)) — role-based access (`admin` vs `user`), `pinned_viz`, `POST /api/admin/skills`, per-skill `viz:` block with client auto-apply.
@@ -45,11 +46,11 @@ Multi-tenant Phase 1.5 shipped across v0.11.0 → v0.12.1: API-key auth, per-use
 
 ## Tests
 
-First suite landed in v0.12.1; tracing tests added in v0.12.2.
+First suite landed in v0.12.1; tracing tests added in v0.12.2; v0.12.4 added TTFT + first-audio event tests.
 
 ```bash
 # From repo root:
-.venv/bin/python -m pytest              # 49 passing, ~3s
+.venv/bin/python -m pytest              # 51 passing, ~3s
 ```
 
 - `tests/test_users.py` — 17 unit tests for `auth/users.py`: `User.allows_skill()` truth table, YAML parsing edge cases (empty list, non-list, stripped/dropped entries, unknown role, malformed pinned_viz), `by_id` lookup, reload flow.
@@ -123,6 +124,8 @@ git push origin main && git push origin v<x.y.z>
 ## One-line rollback
 
 ```bash
-git checkout v0.12.1    # last pre-tracing-migration tag (v0.12.2 had a broken trace-attr API, use v0.12.3 or v0.12.1)
+# v0.12.2 has a broken trace-attr API; v0.12.3 has crashing voice turns.
+# Roll back to v0.12.1 (pre-Langfuse work) or stay on v0.12.4.
+git checkout v0.12.1
 docker compose up -d --no-deps --force-recreate protovoice
 ```
