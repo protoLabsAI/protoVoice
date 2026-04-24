@@ -226,3 +226,35 @@ def test_post_admin_skills_missing_user_id(client: TestClient):
     r = client.post("/api/admin/skills", json={"slug": "chef"})
     assert r.status_code == 200
     assert "user_id is required" in r.json()["error"]
+
+
+# --- Skill slug persistence across "restart" ---------------------------------
+
+def test_skill_selection_persists_across_registry_reset(client: TestClient):
+    """POST /api/skills writes the slug to disk; a fresh UserStateRegistry
+    (simulating a process restart) hydrates it back on first access."""
+    from agent import user_state
+
+    _as_user(_make_user("alice"))
+    r = client.post("/api/skills", json={"slug": "chef"})
+    assert r.status_code == 200
+
+    # Simulate process restart: drop the in-memory registry. Next access
+    # should read the slug back from disk.
+    user_state._REGISTRY = user_state.UserStateRegistry()
+    assert user_state.user_state_for("alice").skill_slug == "chef"
+
+
+def test_admin_skill_selection_persists(client: TestClient):
+    """POST /api/admin/skills also persists the target user's slug."""
+    from agent import user_state
+
+    _as_user(_make_user("bob", role=ROLE_ADMIN))
+    r = client.post(
+        "/api/admin/skills",
+        json={"user_id": "default", "slug": "chef"},
+    )
+    assert r.status_code == 200
+
+    user_state._REGISTRY = user_state.UserStateRegistry()
+    assert user_state.user_state_for("default").skill_slug == "chef"

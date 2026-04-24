@@ -1,6 +1,6 @@
 # Status — pickup for next session
 
-Updated after v0.12.4. Branch: `main`.
+Updated after v0.12.5. Branch: `main`.
 
 ## TL;DR
 
@@ -14,6 +14,7 @@ Multi-tenant Phase 1.5 shipped across v0.11.0 → v0.12.1: API-key auth, per-use
 - Docs: `https://protolabsai.github.io/protoVoice/` — pages rebuilt on every main push.
 
 ### Recent releases
+- **unreleased** — skill selection (and therefore the Fish voice each skill carries) now persists across process restarts. Previously, `UserStateRegistry._by_user` was a bare in-memory dict — `POST /api/skills` mutated it and nothing wrote to disk, so every restart snapped users back to `DEFAULT_SOUL_SLUG` and the Fish built-in `"default"` voice. Fix: new `load_skill_slug` / `save_skill_slug` helpers in `agent/session_store.py` writing to `{SESSION_STORE_DIR}/{user_id}/skill.txt`; `UserStateRegistry.get()` hydrates on first access; both `/api/skills` + `/api/admin/skills` endpoints persist after mutation. Adds `tests/conftest.py` (tmp `SESSION_STORE_DIR`, registry reset between tests) and 2 new endpoint tests pinning the restart-survives-selection contract. 53 tests total.
 - **v0.12.4** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.4)) — voice turns were crashing with `AttributeError: '_ActiveTracer' has no attribute '_name'`. Two causes fixed together: (1) `TurnTracer.__init__` wasn't calling `super().__init__()` so `BaseObserver` never set `_name`; (2) `voice/tts/fish.py` and `voice/tts/kokoro.py` still called the v2-era `active_trace().span(...)` API, which blew up on every voice turn and got masked by (1). Bundled ORBIS#3-style observability: LLM span is now a `GENERATION` with `completion_start_time` stamped on first `LLMTextFrame` (time-to-first-token visible in the trace); `tts.first_audio` event fires on first `BotStartedSpeakingFrame`; `enable_thinking=False` is now the default on every LLM path (was previously only the local-vLLM path — remote gateways were leaving Qwen3's `<think>` scratchpad on, eating the TTFT budget). Adds `tracing.stamp_current_context(span)` helper for call sites outside TurnTracer.
 - **v0.12.3** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.3)) — Langfuse v4.5 API correction: v0.12.2's `span.update_trace()` calls were a no-op (method doesn't exist in langfuse 4.5). Switched to direct OTEL-attribute stamping via `_stamp_trace_attrs(span, session_id=, user_id=)`. Also reads `LANGFUSE_BASE_URL` as the canonical env name (with `LANGFUSE_HOST` fallback).
 - **v0.12.2** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.2)) — Langfuse v2 → v4 SDK migration in `agent/tracing.py`. `client.trace()` / `trace.span()` / `trace.end()` → `start_observation(as_type=…)`. Public helper signatures unchanged; external callers untouched. Adds `tests/test_tracing.py` (16 tests, stubbed SDK). (Superseded by v0.12.3 for the trace-level attrs fix.)
@@ -29,7 +30,7 @@ Multi-tenant Phase 1.5 shipped across v0.11.0 → v0.12.1: API-key auth, per-use
 | Roles | `user` (default, constrained) vs `admin` (unconstrained, can edit other users via `POST /api/admin/skills`). |
 | Skill access | `allowed_skills: [a, b]` on a user entry filters `/api/skills` and 403s disallowed slugs on POST. Single-element list → read-only chip in UI. Omit for unconstrained. Admins ignore it. |
 | Orb viz | `skill.viz` (variant + palette + params) applies on skill switch; `user.pinned_viz` on the roster overrides. Non-admins don't see the Orb tab in the drawer. |
-| Per-user state | Skill, verbosity, delivery controller, tracer, filler state, session memory paths — all keyed by `user.id`. ContextVars carry `current_user_id` / `current_session_id` across async boundaries. |
+| Per-user state | Skill (persisted to `{SESSION_STORE_DIR}/{user_id}/skill.txt`), verbosity, delivery controller, tracer, filler state, session memory paths — all keyed by `user.id`. ContextVars carry `current_user_id` / `current_session_id` across async boundaries. |
 | Admin API | `POST /api/admin/skills` to set any user's mutable active skill. No runtime pin mutation API yet — edit the YAML + `POST /api/users/reload` for persistent access-list changes. |
 
 ### What's still deferred
@@ -50,11 +51,12 @@ First suite landed in v0.12.1; tracing tests added in v0.12.2; v0.12.4 added TTF
 
 ```bash
 # From repo root:
-.venv/bin/python -m pytest              # 51 passing, ~3s
+.venv/bin/python -m pytest              # 53 passing, ~5s
 ```
 
 - `tests/test_users.py` — 17 unit tests for `auth/users.py`: `User.allows_skill()` truth table, YAML parsing edge cases (empty list, non-list, stripped/dropped entries, unknown role, malformed pinned_viz), `by_id` lookup, reload flow.
-- `tests/test_endpoints.py` — 16 FastAPI TestClient integration tests: `/api/whoami` shape, `/api/skills` filtering + `locked` flag, active-slug drift-to-first-allowed, POST permit/deny paths, admin-only `/api/admin/skills`.
+- `tests/test_endpoints.py` — 18 FastAPI TestClient integration tests: `/api/whoami` shape, `/api/skills` filtering + `locked` flag, active-slug drift-to-first-allowed, POST permit/deny paths, admin-only `/api/admin/skills`, and skill-slug persistence surviving a registry reset (simulated process restart).
+- `tests/conftest.py` — points `SESSION_STORE_DIR` at a tmpdir before `app` is imported (session_store captures the path at module-load), and resets `user_state._REGISTRY` per test so hydration-from-disk is deterministic.
 - `tests/test_tracing.py` — 16 unit tests pinning Langfuse v4 call shapes: `start_turn_trace` → `client.start_observation(as_type="span")` + `root.update_trace(session_id=, user_id=)`, `continue_trace` → `TraceContext(trace_id=…)`, `TurnTracer` LLM + tool-span lifecycle, `tracing.span()` contextmanager, `propagation_headers` fallbacks, fail-open paths. Stubs `langfuse` via a fake module so the dep isn't needed in the test venv.
 - `pyproject.toml` has `[tool.pytest.ini_options]` pointing at `tests/`; `audioop` DeprecationWarning filtered (pipecat imports it on Python 3.12).
 

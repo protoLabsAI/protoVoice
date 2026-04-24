@@ -106,6 +106,7 @@ from agent import tracing as _tracing
 from agent.session_store import (
     drain_stashed_deliveries,
     load_last_summary,
+    save_skill_slug,
     save_summary,
     stash_delivery,
 )
@@ -1100,6 +1101,7 @@ async def set_skill(body: dict, user: User = Depends(require_user)):
             ),
         )
     user_state_for(user.id).skill_slug = slug
+    save_skill_slug(user.id, slug)
     return {"active": slug}
 
 
@@ -1121,6 +1123,7 @@ async def admin_set_skill(body: dict, admin: User = Depends(require_admin)):
     if not user_registry.single_user_mode() and user_registry.by_id(target_id) is None:
         return {"error": f"unknown user: {target_id}"}
     user_state_for(target_id).skill_slug = slug
+    save_skill_slug(target_id, slug)
     return {"ok": True, "user_id": target_id, "active": slug}
 
 

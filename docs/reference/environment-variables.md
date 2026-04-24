@@ -100,7 +100,7 @@ When all three are set, each user turn becomes a trace. Unset → no-op. See [Tr
 | Variable | Default | Purpose |
 |:---|:---|:---|
 | `CONFIG_DIR` | `config` | Where SOUL.md + skills/ + agents.yaml live |
-| `SESSION_STORE_DIR` | `/tmp/protovoice_sessions` | Per-user session summaries + pending deliveries (`{user_id}/{skill_slug}.txt`) |
+| `SESSION_STORE_DIR` | `/tmp/protovoice_sessions` | Per-user session summaries, pending deliveries, and active skill selection (`{user_id}/{skill_slug}.txt`, `{user_id}/skill.txt`) |
 
 ## Auth (API-key users)
 
