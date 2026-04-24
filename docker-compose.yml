@@ -3,8 +3,10 @@
 #   docker compose up -d
 #
 # Services:
-#   - protovoice   (GPU 0)   WebRTC UI + Whisper + Kokoro + routing vLLM
-#   - fish-speech  (GPU 1)   Fish Audio S2-Pro TTS sidecar — default backend
+#   - protovoice          (GPU 0)   WebRTC UI + Whisper + Kokoro + routing vLLM
+#   - fish-speech         (GPU 1)   Fish Audio S2-Pro TTS sidecar — default backend
+#   - fish-openai-shim              OpenAI /v1/audio/speech ↔ Fish /v1/tts proxy on :8093
+#                                   (no GPU — pure HTTP + ffmpeg; talks to fish-speech)
 #
 # Use `TTS_BACKEND=kokoro docker compose up protovoice` to run without Fish.
 
@@ -21,10 +23,12 @@ services:
       - "${FISH_PORT:-8092}:8092"
     volumes:
       - ${FISH_REFERENCES_DIR:-/mnt/data/fish-references}:/app/references
-      # .dockerignore excludes .venv/, so bind-mount from the host checkout.
-      # Dockerfile comment claims COPY . includes them, but it doesn't.
-      - /home/ava/dev/fish-speech/.venv:/app/.venv:ro
-      - /home/ava/dev/fish-speech/checkpoints:/app/checkpoints:ro
+      # The Fish Dockerfile COPYs everything, but .dockerignore excludes
+      # .venv/ and the checkpoints (too large) don't belong baked into the
+      # image. Bind-mount both from the sibling ../fish-speech checkout that
+      # the `build.context` above already targets.
+      - ${FISH_SPEECH_DIR:-../fish-speech}/.venv:/app/.venv:ro
+      - ${FISH_SPEECH_DIR:-../fish-speech}/checkpoints:/app/checkpoints:ro
     environment:
       - NVIDIA_VISIBLE_DEVICES=${FISH_GPU:-1}
     deploy:
@@ -40,6 +44,20 @@ services:
       timeout: 10s
       start_period: 600s   # torch.compile warmup can take ~3-5 min from cold
       retries: 5
+
+  fish-openai-shim:
+    build:
+      context: ./services/fish-openai-shim
+    container_name: protovoice-fish-shim
+    restart: unless-stopped
+    depends_on:
+      fish-speech:
+        condition: service_started
+    ports:
+      - "${FISH_SHIM_PORT:-8093}:8093"
+    environment:
+      - FISH_URL=http://fish-speech:8092
+      - FISH_SAMPLE_RATE=44100
 
   protovoice:
     build: .

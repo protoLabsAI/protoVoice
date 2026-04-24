@@ -1,9 +1,10 @@
 # Running with Docker Compose
 
-protoVoice ships two services:
+protoVoice ships three services:
 
 - **`protovoice`** — WebRTC + Whisper + routing vLLM + Kokoro fallback (GPU 0)
 - **`fish-speech`** — Fish Audio S2-Pro TTS sidecar (GPU 1)
+- **`fish-openai-shim`** — tiny FastAPI proxy on `:8093` that rewrites OpenAI `/v1/audio/speech` requests into Fish's native `/v1/tts` and forwards them to `fish-speech`. Lets LiteLLM and any OpenAI SDK client route TTS to Fish without knowing Fish's wire format. The container is pure HTTP + ffmpeg — it does no ML and needs no GPU. See [TTS Backends → OpenAI-compat](../reference/tts-backends.md).
 
 Default config assumes two GPUs on one host. Adjust via env if you have fewer.
 

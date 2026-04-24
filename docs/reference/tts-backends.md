@@ -35,7 +35,20 @@ See [Clone a Voice](/guides/clone-a-voice).
 
 ### Exposing Fish as an OpenAI-compatible endpoint
 
-Fish's native `POST /v1/tts` uses its own `ServeTTSRequest` shape, not OpenAI's `/v1/audio/speech`. To put Fish behind a LiteLLM gateway (or any OpenAI SDK client), run the external shim at [`protoLabsAI/lab` → `experiments/fish-openai-shim/`](https://github.com/protoLabsAI/lab). It wraps `POST /v1/audio/speech` and forwards to this sidecar, supporting `wav` (one-shot), `pcm` (streaming), and `mp3` (streaming via ffmpeg). The shim is separate from protoVoice itself because it's deployment-infra, not part of the voice pipeline.
+Fish's native `POST /v1/tts` uses its own `ServeTTSRequest` shape, not OpenAI's `/v1/audio/speech`. protoVoice ships a bundled **`fish-openai-shim`** sidecar (in `services/fish-openai-shim/`, started automatically by `docker compose up -d`) that translates between the two contracts so LiteLLM and any OpenAI SDK client can hit Fish by name. Listens on `:8093`, supports `wav` (one-shot), `pcm` (streaming), and `mp3` (streaming via ffmpeg). Example LiteLLM route:
+
+```yaml
+model_list:
+  - model_name: fish-s2-pro
+    litellm_params:
+      model: openai/fish-s2-pro
+      api_base: http://protolabs:8093/v1
+      api_key: fake-key-not-needed
+    model_info:
+      mode: audio_speech
+```
+
+**`voice` is required in practice.** OpenAI's spec makes it mandatory and LiteLLM's router enforces it (`Router.aspeech()` raises `missing 1 required positional argument: 'voice'` and returns 500 to the client otherwise). Direct hits to `:8093` work without it (the shim defaults `voice="default"`), but any gateway in front of it will reject.
 
 ### Env
 
