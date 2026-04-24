@@ -11,8 +11,14 @@
 FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# build-essential + python3-dev are REQUIRED on Blackwell: torch.compile
+# (Inductor) shells out to gcc at runtime to build CUDA kernels as Python
+# extension modules, which needs both the C toolchain AND Python.h. Without
+# either, the first synth call crashes the worker with either "Failed to find
+# C compiler" or "CalledProcessError ... cuda_utils.c".
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip ffmpeg libsndfile1 curl ca-certificates \
+    python3 python3-pip python3-dev ffmpeg libsndfile1 curl ca-certificates \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
