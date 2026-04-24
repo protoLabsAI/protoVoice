@@ -21,6 +21,10 @@ services:
       - "${FISH_PORT:-8092}:8092"
     volumes:
       - ${FISH_REFERENCES_DIR:-/mnt/data/fish-references}:/app/references
+      # .dockerignore excludes .venv/, so bind-mount from the host checkout.
+      # Dockerfile comment claims COPY . includes them, but it doesn't.
+      - /home/ava/dev/fish-speech/.venv:/app/.venv:ro
+      - /home/ava/dev/fish-speech/checkpoints:/app/checkpoints:ro
     environment:
       - NVIDIA_VISIBLE_DEVICES=${FISH_GPU:-1}
     deploy:
@@ -34,8 +38,8 @@ services:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8092/v1/health')"]
       interval: 30s
       timeout: 10s
-      start_period: 180s
-      retries: 3
+      start_period: 600s   # torch.compile warmup can take ~3-5 min from cold
+      retries: 5
 
   protovoice:
     build: .

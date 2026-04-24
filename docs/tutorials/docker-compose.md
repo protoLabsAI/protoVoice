@@ -35,6 +35,8 @@ START_VLLM=0 LLM_URL=http://10.0.0.10:8000/v1 docker compose up -d
 
 - `HF_HOME` → `/models` — HuggingFace cache. Default: `/mnt/models/huggingface`.
 - `FISH_REFERENCES_DIR` → `/app/references` — persists saved voice references across restarts.
+- **`../fish-speech/.venv` → `/app/.venv`** (read-only) — bind-mounted because Fish's `.dockerignore` excludes `.venv/`, so the image ships without it. Without this mount the container crashes at startup with `/app/.venv/bin/python: No such file or directory`.
+- **`../fish-speech/checkpoints` → `/app/checkpoints`** (read-only) — same rationale; S2-Pro weights are too large to bake into the image. Keep them in the host checkout and mount.
 
 ## GPU allocation
 
@@ -48,6 +50,12 @@ On a single-GPU host, set `TTS_BACKEND=kokoro` to skip Fish entirely and keep ev
 ## Cold start
 
 Fish Audio's first call triggers a ~2-minute `torch.compile` codegen. protoVoice's `prewarm()` on startup sends a single silent utterance to absorb this — you should never see that hit in a real turn.
+
+The sidecar's healthcheck uses `start_period: 600s` so Docker doesn't mark the container unhealthy and restart-loop while `torch.compile` is still running. If you observe the container repeatedly bouncing on first boot, confirm that value hasn't been lowered.
+
+### Fish image needs a C toolchain + Python headers
+
+`Dockerfile.fish` installs `build-essential` and `python3-dev` on top of `nvidia/cuda:runtime`. Both are **required** — torch.compile's Inductor backend shells out to `gcc` at synth time to build CUDA kernels as Python extension modules. Missing either produces `Failed to find C compiler` or `CalledProcessError ... cuda_utils.c` on first synth, followed by an infinite restart loop. If you ever strip these from the Dockerfile for image size, Fish will stop working on any `torch.compile`-gated build.
 
 Whisper takes ~2 s to load + warm.
 

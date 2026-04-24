@@ -33,6 +33,10 @@ Runs as the `fish-speech` sidecar container. Build context is `../fish-speech` (
 
 See [Clone a Voice](/guides/clone-a-voice).
 
+### Exposing Fish as an OpenAI-compatible endpoint
+
+Fish's native `POST /v1/tts` uses its own `ServeTTSRequest` shape, not OpenAI's `/v1/audio/speech`. To put Fish behind a LiteLLM gateway (or any OpenAI SDK client), run the external shim at [`protoLabsAI/lab` → `experiments/fish-openai-shim/`](https://github.com/protoLabsAI/lab). It wraps `POST /v1/audio/speech` and forwards to this sidecar, supporting `wav` (one-shot), `pcm` (streaming), and `mp3` (streaming via ffmpeg). The shim is separate from protoVoice itself because it's deployment-infra, not part of the voice pipeline.
+
 ### Env
 
 | Variable | Default | Purpose |
