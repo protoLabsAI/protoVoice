@@ -49,6 +49,10 @@ def _pending_path(user_id: str, skill_slug: str) -> Path:
     return _user_dir(user_id) / f"{_safe(skill_slug)}.pending.json"
 
 
+def _skill_slug_path(user_id: str) -> Path:
+    return _user_dir(user_id) / "skill.txt"
+
+
 def _legacy_summary_path(skill_slug: str) -> Path:
     return _DEFAULT_DIR / f"{_safe(skill_slug)}.txt"
 
@@ -157,3 +161,36 @@ def drain_stashed_deliveries(user_id: str, skill_slug: str) -> list[dict[str, An
         f"({user_id!r}, {skill_slug!r})"
     )
     return data
+
+
+# --- Skill slug (active voice) ----------------------------------------------
+
+def load_skill_slug(user_id: str) -> str | None:
+    """Return this user's persisted active skill slug, or None if unset.
+
+    The active skill carries the voice, so this is what makes a voice
+    selection survive process restart.
+    """
+    p = _skill_slug_path(user_id)
+    if not p.exists():
+        return None
+    try:
+        slug = p.read_text(encoding="utf-8").strip()
+        return slug or None
+    except Exception as e:
+        logger.warning(f"[session_store] failed to read {p}: {e}")
+        return None
+
+
+def save_skill_slug(user_id: str, slug: str) -> None:
+    if not slug or not slug.strip():
+        return
+    p = _skill_slug_path(user_id)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(slug.strip(), encoding="utf-8")
+        logger.info(
+            f"[session_store] saved skill slug for {user_id!r}: {slug!r}"
+        )
+    except Exception as e:
+        logger.warning(f"[session_store] failed to write {p}: {e}")

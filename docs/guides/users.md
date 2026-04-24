@@ -110,7 +110,7 @@ When all three credential vars are set, Infisical becomes the active source; `co
 
 | Concern | Behavior |
 |:---|:---|
-| Skill selection (`/api/skills`) | Each user has their own active skill — Alice on `chef` doesn't affect Bob's dropdown. Non-admins are filtered to their `allowed_skills`; disallowed slugs return `403`. |
+| Skill selection (`/api/skills`) | Each user has their own active skill — Alice on `chef` doesn't affect Bob's dropdown. Non-admins are filtered to their `allowed_skills`; disallowed slugs return `403`. Selection is persisted to `{SESSION_STORE_DIR}/{user_id}/skill.txt` so the chosen voice survives process restart. |
 | Orb viz | `pinned_viz` on the user entry overrides `skill.viz`. Non-admin users can't open the Orb settings tab in the drawer. |
 | Verbosity (`/api/verbosity`) | Per-user. Alice's `silent` is invisible to Bob's `chatty`. |
 | Session memory | Stored at `{SESSION_STORE_DIR}/{user_id}/{skill_slug}.txt` — no cross-user sharing by design. |

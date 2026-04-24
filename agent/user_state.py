@@ -23,6 +23,7 @@ from typing import Any
 
 from .delivery import DeliveryController
 from .filler import FillerGenerator, Settings as FillerSettings
+from .session_store import load_skill_slug
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,9 @@ class UserStateRegistry:
         st = self._by_user.get(user_id)
         if st is None:
             st = UserState(user_id=user_id)
+            persisted = load_skill_slug(user_id)
+            if persisted:
+                st.skill_slug = persisted
             self._by_user[user_id] = st
         return st
 
